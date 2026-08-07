@@ -1,0 +1,273 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   VANTA STYLE ADDITIONS v3
+   Append this to the end of your existing style.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Boot canvas fills overlay perfectly ───────────────────────────────────── */
+#bootCanvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* ── Dashboard reactor canvas fills its container ──────────────────────────── */
+#reactorCanvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* ── Core container entrance animation ─────────────────────────────────────── */
+#coreContainer {
+    position: relative;
+    opacity: 0;
+    transform: scale(0.3);
+    transition: opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+                transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#coreContainer.show {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* ── Topbar slide-in ────────────────────────────────────────────────────────── */
+#topbar {
+    transform: translateY(-100%);
+    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+#topbar.slide-in { transform: translateY(0); }
+
+/* ── Bottom panel slide-in ─────────────────────────────────────────────────── */
+#bottomPanel {
+    transform: translateY(100%);
+    transition: transform 0.75s cubic-bezier(0.16, 1, 0.3, 1);
+}
+#bottomPanel.slide-in { transform: translateY(0); }
+
+/* ── Energy wave ────────────────────────────────────────────────────────────── */
+#energyWave {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(0, 212, 255, 0.6);
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+    pointer-events: none;
+}
+#energyWave.expand {
+    animation: waveExpand 1.2s cubic-bezier(0.1, 0.6, 0.4, 1) forwards;
+}
+@keyframes waveExpand {
+    0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.7; }
+    100% { transform: translate(-50%,-50%) scale(300); opacity: 0;   }
+}
+
+/* ── Boot text ─────────────────────────────────────────────────────────────── */
+#bootTextWrap {
+    position: absolute;
+    bottom: 18%;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    z-index: 10;
+    pointer-events: none;
+}
+.boot-heading {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(0.85rem, 2vw, 1.1rem);
+    font-weight: 500;
+    letter-spacing: 0.25em;
+    color: rgba(0, 212, 255, 0.9);
+    opacity: 0;
+    transition: opacity 0.8s ease;
+    margin-bottom: 0.5rem;
+}
+.boot-heading.show { opacity: 1; }
+.boot-heading.greeting {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: clamp(0.9rem, 2.2vw, 1.2rem);
+    margin-top: 0.4rem;
+}
+
+/* ── Diagnostics ────────────────────────────────────────────────────────────── */
+#diagnostics {
+    position: absolute;
+    bottom: 5%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(340px, 80vw);
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    z-index: 10;
+}
+#diagnostics.show { opacity: 1; }
+
+.diag-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.4rem;
+}
+.diag-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    color: rgba(0, 212, 255, 0.6);
+    width: 130px;
+    flex-shrink: 0;
+}
+.diag-track {
+    flex: 1;
+    height: 3px;
+    background: rgba(0, 212, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.diag-fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #00d4ff, #ffffff);
+    border-radius: 2px;
+    transition: width 1.4s cubic-bezier(0.25, 1, 0.5, 1);
+    transition-delay: var(--d, 0ms);
+}
+.diag-fill.run { width: 100%; }
+
+/* ── Orchestrate button ─────────────────────────────────────────────────────── */
+.orchestrate-btn {
+    background: transparent;
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    color: rgba(0, 212, 255, 0.6);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    padding: 0.3rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    margin-left: 0.75rem;
+}
+.orchestrate-btn:hover {
+    border-color: rgba(0, 212, 255, 0.6);
+    color: #00d4ff;
+    box-shadow: 0 0 12px rgba(0, 212, 255, 0.15);
+}
+.orchestrate-btn.active {
+    border-color: #00d4ff;
+    color: #fff;
+    background: rgba(0, 212, 255, 0.12);
+    box-shadow: 0 0 16px rgba(0, 212, 255, 0.25);
+}
+
+/* ── Orchestration panel ────────────────────────────────────────────────────── */
+.orchestration-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(480px, 90vw);
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    padding: 1.2rem 1.4rem;
+    z-index: 100;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 0 40px rgba(0, 212, 255, 0.08);
+}
+.orch-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    color: #00d4ff;
+    margin-bottom: 0.9rem;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+    padding-bottom: 0.6rem;
+}
+.orch-log {
+    max-height: 200px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+.orch-entry {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.3rem 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.orch-model  { color: #00d4ff; min-width: 80px; }
+.orch-step   { color: rgba(255,255,255,0.6); flex: 1; }
+.orch-status { font-size: 0.6rem; letter-spacing: 0.1em; }
+.orch-entry.done       .orch-status { color: #00ff9d; }
+.orch-entry.thinking   .orch-status { color: #f0c040; }
+.orch-entry.rate_limited .orch-status { color: #ff6b6b; }
+.orch-entry.error      .orch-status { color: #ff4444; }
+
+/* ── Custom cursor ──────────────────────────────────────────────────────────── */
+.cursor {
+    position: fixed;
+    width: 6px;
+    height: 6px;
+    background: #00d4ff;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 9999;
+    transform: translate(-50%, -50%);
+    transition: width 0.2s, height 0.2s, background 0.2s;
+}
+.cursor-follower {
+    position: fixed;
+    width: 22px;
+    height: 22px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 9998;
+    transform: translate(-50%, -50%);
+    transition: width 0.3s, height 0.3s, border-color 0.3s;
+}
+.cursor.hover        { width: 10px; height: 10px; background: #fff; }
+.cursor-follower.hover { width: 36px; height: 36px; border-color: rgba(255,255,255,0.5); }
+
+/* ── Boot overlay fade ──────────────────────────────────────────────────────── */
+#bootOverlay {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 1000;
+    overflow: hidden;
+}
+
+/* ── Streaming message cursor ───────────────────────────────────────────────── */
+.msg.streaming .msg-body::after {
+    content: '▋';
+    animation: blink 0.7s step-end infinite;
+    color: #00d4ff;
+}
+@keyframes blink {
+    50% { opacity: 0; }
+}
+
+/* ── Status dot states ─────────────────────────────────────────────────────── */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; transition: background 0.4s, box-shadow 0.4s; }
+.status-dot.idle     { background: #00d4ff; box-shadow: 0 0 8px #00d4ff; }
+.status-dot.thinking { background: #f0c040; box-shadow: 0 0 10px #f0c040; animation: pulse 0.8s infinite; }
+.status-dot.speaking { background: #00ff9d; box-shadow: 0 0 10px #00ff9d; animation: pulse 0.4s infinite; }
+.status-dot.learning { background: #aa88ff; box-shadow: 0 0 10px #aa88ff; animation: pulse 0.6s infinite; }
+.status-dot.sleeping { background: #334; box-shadow: none; }
+.status-dot.error    { background: #ff4444; box-shadow: 0 0 10px #ff4444; }
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1);    opacity: 1; }
+    50%       { transform: scale(1.4); opacity: 0.7; }
+}
