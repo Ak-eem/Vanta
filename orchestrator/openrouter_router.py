@@ -1,4 +1,5 @@
-"""Optional OpenRouter dual-model API client.
+"""
+Optional OpenRouter dual-model API client.
 
 OpenRouter is used for orchestration-only calls (task analysis and result
 merging). Browser automation remains in :mod:`browser_agent`: the browser
@@ -15,6 +16,8 @@ import urllib.error
 import urllib.request
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
+
+from .model_router import FREE_MODEL_PRIORITIES
 
 
 logger = logging.getLogger(__name__)
@@ -113,7 +116,9 @@ class OpenRouterClient:
             return None
         return cls(
             api_key,
-            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            base_url=os.getenv(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ),
             flash_model=os.getenv("OPENROUTER_FLASH_MODEL", DEFAULT_FLASH_MODEL),
             brain_model=os.getenv("OPENROUTER_BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
             brain_fallback_model=os.getenv(
@@ -136,6 +141,52 @@ class OpenRouterClient:
         if task_type and task_type.lower() in self.COMPLEX_TASK_TYPES:
             return self.brain_model
         return self.flash_model
+
+    def execute(
+        self,
+        task_prompt: str,
+        task_type: str,
+        callback: Optional[Any] = None,
+        on_progress: Optional[Any] = None,
+    ) -> tuple[str, str]:
+        """Execute a subtask through the free OpenRouter priority list.
+
+        Each candidate is sent through the existing ``complete`` path. Network
+        errors, timeouts, HTTP 429s, and HTTP 5xx responses are retryable, so
+        execution fails over to the next free model. The existing brain to
+        brain-fallback behavior remains owned by ``complete``.
+        """
+        progress = on_progress or callback
+        models = FREE_MODEL_PRIORITIES.get(
+            task_type, FREE_MODEL_PRIORITIES["other"]
+        )
+        last_error: Optional[OpenRouterError] = None
+
+        for index, model in enumerate(models):
+            if progress:
+                progress(model, "trying", None)
+            try:
+                response = self.complete(
+                    model=model,
+                    messages=[{"role": "user", "content": task_prompt}],
+                )
+                content = response.choices[0].message.content
+                if progress:
+                    progress(model, "done", content)
+                return content, model
+            except OpenRouterError as exc:
+                last_error = exc
+                logger.warning(
+                    "OpenRouter free model=%s failed (%s/%s): %s",
+                    model,
+                    index + 1,
+                    len(models),
+                    exc,
+                )
+                if progress:
+                    progress(model, "error", str(exc))
+
+        raise last_error or OpenRouterError("OpenRouter free model execution failed")
 
     def complete(
         self,
@@ -175,7 +226,7 @@ class OpenRouterClient:
                 logger.warning(
                     "OpenRouter brain model=%s failed with %s; transparently "
                     "failing over to brain fallback model=%s",
-                    model,
+                    requested_model,
                     exc,
                     self.brain_fallback_model,
                 )
@@ -225,8 +276,7 @@ class OpenRouterClient:
             ) from exc
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             raise OpenRouterError(
-                f"OpenRouter request failed: {exc}",
-                retryable=True,
+                f"OpenRouter request failed: {exc}", retryable=True
             ) from exc
 
         try:
@@ -235,9 +285,10 @@ class OpenRouterClient:
             message = choice["message"]
             content = message.get("content", "")
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise OpenRouterError("OpenRouter returned an invalid completion") from exc
+            raise OpenRouterError(
+                "OpenRouter returned an invalid completion"
+            ) from exc
 
-        # Keep the response shape consumed by task_analyzer and orchestrator.
         return SimpleNamespace(
             id=data.get("id"),
             model=data.get("model", model),

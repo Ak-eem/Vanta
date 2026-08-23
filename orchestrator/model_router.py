@@ -5,12 +5,12 @@ Models are used via browser automation (no API keys).
 If the top model is rate-limited, the next one takes over.
 """
 
-# ── Model registry ─────────────────────────────────────────────────────────────
+# ━━━ Model registry ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Each entry: chat URL, selector map, rate-limit signatures
 MODELS = {
     "claude": {
-        "url":   "https://claude.ai/new",
-        "name":  "Claude",
+        "url":    "https://claude.ai/new",
+        "name":   "Claude",
         "input_sel":    'div[contenteditable="true"].ProseMirror',
         "send_sel":     'button[aria-label="Send message"]',
         "response_sel": '.font-claude-message',
@@ -23,8 +23,8 @@ MODELS = {
         ],
     },
     "chatgpt": {
-        "url":   "https://chatgpt.com/",
-        "name":  "ChatGPT",
+        "url":    "https://chatgpt.com/",
+        "name":   "ChatGPT",
         "input_sel":    'textarea[placeholder]',
         "send_sel":     'button[data-testid="send-button"]',
         "response_sel": '[data-message-author-role="assistant"] .markdown',
@@ -37,11 +37,11 @@ MODELS = {
         ],
     },
     "gemini": {
-        "url":   "https://gemini.google.com/app",
-        "name":  "Gemini",
+        "url":    "https://gemini.google.com/app",
+        "name":   "Gemini",
         "input_sel":    'rich-textarea div[contenteditable="true"]',
         "send_sel":     'button[aria-label="Send message"]',
-        "response_sel": 'model-response .response-content',
+        "response_sel": '.model-response .response-content',
         "rate_limit_texts": [
             "rate limit",
             "too many requests",
@@ -50,8 +50,8 @@ MODELS = {
         ],
     },
     "deepseek": {
-        "url":   "https://chat.deepseek.com/",
-        "name":  "DeepSeek",
+        "url":    "https://chat.deepseek.com/",
+        "name":   "DeepSeek",
         "input_sel":    'textarea',
         "send_sel":     'button[type="submit"]',
         "response_sel": '.ds-markdown',
@@ -63,8 +63,8 @@ MODELS = {
         ],
     },
     "perplexity": {
-        "url":   "https://www.perplexity.ai/",
-        "name":  "Perplexity",
+        "url":    "https://www.perplexity.ai/",
+        "name":   "Perplexity",
         "input_sel":    'textarea[placeholder]',
         "send_sel":     'button[aria-label="Submit"]',
         "response_sel": '.prose',
@@ -76,18 +76,31 @@ MODELS = {
     },
 }
 
-# ── Priority routing table ─────────────────────────────────────────────────────
+# ━━━ Priority routing table ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Best model first — orchestrator tries them in order on rate-limit failover
 PRIORITIES: dict[str, list[str]] = {
-    "ui":       ["claude",     "chatgpt",  "gemini"],
-    "auth":     ["claude",     "chatgpt",  "deepseek"],
-    "database": ["chatgpt",    "deepseek", "claude"],
-    "security": ["claude",     "perplexity","chatgpt"],
-    "backend":  ["deepseek",   "chatgpt",  "claude"],
-    "research": ["perplexity", "gemini",   "claude"],
-    "code":     ["deepseek",   "chatgpt",  "claude"],
-    "devops":   ["chatgpt",    "deepseek", "claude"],
-    "other":    ["claude",     "chatgpt",  "gemini"],
+    "ui":         ["claude",     "chatgpt",  "gemini"],
+    "auth":       ["claude",     "chatgpt",  "deepseek"],
+    "database":   ["chatgpt",    "deepseek", "claude"],
+    "security":   ["claude",     "perplexity", "chatgpt"],
+    "backend":    ["deepseek",   "chatgpt",  "claude"],
+    "research":   ["perplexity", "gemini",   "claude"],
+    "code":       ["deepseek",   "chatgpt",  "claude"],
+    "devops":     ["chatgpt",    "deepseek", "claude"],
+    "other":      ["claude",     "chatgpt",  "gemini"],
+}
+
+# Free OpenRouter models used for default subtask execution.
+FREE_MODEL_PRIORITIES: dict[str, list[str]] = {
+    "ui":         ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "auth":       ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "database":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "security":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "backend":    ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "research":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "code":       ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "devops":     ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "other":      ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
 }
 
 

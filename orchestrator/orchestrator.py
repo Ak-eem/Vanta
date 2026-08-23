@@ -1,20 +1,34 @@
 """orchestrator.py
 The brain of multi-model orchestration.
 Breaks a task into sub-tasks, routes each to the best model,
-executes via browser agent, and merges all results.
+executes via OpenRouter by default (or opt-in browser automation),
+and merges all results.
 """
 
 import json
+import os
 from typing import Callable, Optional
 
 from .task_analyzer import analyze_task, should_orchestrate
 from .model_router import get_model_list, get_model_info
 from .openrouter_router import OpenRouterClient
 
-try:
-    from .browser_agent import BrowserAgentSync
-    BROWSER_OK = True
-except Exception:
+
+BROWSER_AUTOMATION = os.getenv("BROWSER_AUTOMATION", "manual").strip().lower() in {
+    "auto",
+    "on",
+}
+
+if BROWSER_AUTOMATION:
+    try:
+        from .browser_agent import BrowserAgentSync
+
+        BROWSER_OK = True
+    except Exception:
+        BrowserAgentSync = None
+        BROWSER_OK = False
+else:
+    BrowserAgentSync = None
     BROWSER_OK = False
 
 
@@ -39,7 +53,7 @@ class VantaOrchestrator:
     def __init__(self, groq_client, model: str):
         self.groq = groq_client
         self.model = model
-        self._agent: Optional[BrowserAgentSync] = None
+        self._agent: Optional["BrowserAgentSync"] = None
 
         # OpenRouter is an optional API path for orchestration calls only.
         # BrowserAgentSync below remains responsible for browser automation.
@@ -58,7 +72,7 @@ class VantaOrchestrator:
             self.merge_model = model
 
     def _get_agent(self) -> "BrowserAgentSync":
-        if not BROWSER_OK:
+        if not BROWSER_OK or BrowserAgentSync is None:
             raise ImportError(
                 "playwright not installed. Run: pip install playwright "
                 "&& playwright install chromium"
@@ -91,12 +105,15 @@ class VantaOrchestrator:
             emit("Simple task — handling locally", "Vanta", "done")
             return self._local_fallback(task)
 
-        # Step 2: Execute sub-tasks through browser automation.
-        try:
-            agent = self._get_agent()
-        except ImportError as exc:
-            emit(str(exc), "System", "error")
-            return self._local_fallback(task)
+        # Step 2: Execute sub-tasks through OpenRouter by default. Browser
+        # automation is opt-in and is imported/started only when enabled.
+        agent = None
+        if BROWSER_AUTOMATION:
+            try:
+                agent = self._get_agent()
+            except ImportError as exc:
+                emit(str(exc), "System", "error")
+                return self._local_fallback(task)
 
         results = []
         for subtask in sorted(subtasks, key=lambda x: x.get("priority", 99)):
@@ -122,11 +139,27 @@ class VantaOrchestrator:
             def on_progress(step, model_name, status, result=None):
                 emit(step, model_name, status, result)
 
-            response, model_used = agent.send_with_failover(
-                model_priority=model_list,
-                prompt=prompt,
-                on_progress=on_progress,
-            )
+            if agent is not None:
+                response, model_used = agent.send_with_failover(
+                    model_priority=model_list,
+                    prompt=prompt,
+                    on_progress=on_progress,
+                )
+            elif self.openrouter is not None:
+                response, model_used = self.openrouter.execute(
+                    prompt,
+                    task_type,
+                    on_progress=lambda model_name, status, result=None: emit(
+                        f"Sub-task: {task_type}", model_name, status, result
+                    ),
+                )
+            else:
+                emit(
+                    "OpenRouter is not configured; handling task locally",
+                    "Vanta",
+                    "error",
+                )
+                return self._local_fallback(task)
 
             results.append(
                 {
