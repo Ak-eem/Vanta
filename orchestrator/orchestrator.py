@@ -1,14 +1,15 @@
-"""
-orchestrator.py
+"""orchestrator.py
 The brain of multi-model orchestration.
-Breaks a task into sub-tasks → routes each to the best model →
-executes via browser agent → merges all results.
+Breaks a task into sub-tasks, routes each to the best model,
+executes via browser agent, and merges all results.
 """
 
 import json
 from typing import Callable, Optional
+
 from .task_analyzer import analyze_task, should_orchestrate
-from .model_router  import get_model_list, get_model_info
+from .model_router import get_model_list, get_model_info
+from .openrouter_router import OpenRouterClient
 
 try:
     from .browser_agent import BrowserAgentSync
@@ -36,59 +37,78 @@ Instructions:
 
 class VantaOrchestrator:
     def __init__(self, groq_client, model: str):
-        self.groq   = groq_client
-        self.model  = model
+        self.groq = groq_client
+        self.model = model
         self._agent: Optional[BrowserAgentSync] = None
 
-    def _get_agent(self) -> BrowserAgentSync:
+        # OpenRouter is an optional API path for orchestration calls only.
+        # BrowserAgentSync below remains responsible for browser automation.
+        self.openrouter = OpenRouterClient.from_env()
+        if self.openrouter is not None:
+            self.analysis_client = self.openrouter
+            self.analysis_model = self.openrouter.flash_model
+            self.merge_client = self.openrouter
+            self.merge_model = self.openrouter.brain_model
+        else:
+            self.analysis_client = groq_client
+            self.analysis_model = model
+            self.merge_client = groq_client
+            self.merge_model = model
+
+    def _get_agent(self) -> "BrowserAgentSync":
         if not BROWSER_OK:
-            raise ImportError("playwright not installed. Run: pip install playwright && playwright install chromium")
+            raise ImportError(
+                "playwright not installed. Run: pip install playwright "
+                "&& playwright install chromium"
+            )
         if self._agent is None:
             self._agent = BrowserAgentSync()
             self._agent.start()
             print("[Orchestrator] Browser agent started.")
         return self._agent
 
-    def run(self, task: str, progress_callback: Optional[Callable] = None) -> str:
-        """
-        Full orchestration pipeline:
-        1. Analyze task
-        2. Route sub-tasks to models
-        3. Execute via browser agent (with rate-limit failover)
-        4. Merge results with Groq
-        """
+    def run(
+        self,
+        task: str,
+        progress_callback: Optional[Callable] = None,
+    ) -> str:
+        """Run the complete orchestration pipeline."""
+
         def emit(step, model, status, result=None):
             if progress_callback:
                 progress_callback(step, model, status, result)
 
-        # ── Step 1: Analyze ──────────────────────────────────────────────────
-        emit("Analyzing task…", "Vanta", "thinking")
-        analysis = analyze_task(task, self.groq, self.model)
+        # Step 1: Analyze
+        emit("Analyzing task...", "Vanta", "thinking")
+        analysis = analyze_task(task, self.analysis_client, self.analysis_model)
         subtasks = analysis.get("subtasks", [])
         emit(f"Found {len(subtasks)} sub-tasks", "Vanta", "done")
 
-        # If it's simple or orchestration isn't needed, just do it locally
+        # If it's simple or orchestration isn't needed, handle directly.
         if not should_orchestrate(analysis):
             emit("Simple task — handling locally", "Vanta", "done")
             return self._local_fallback(task)
 
-        # ── Step 2: Execute sub-tasks ─────────────────────────────────────────
+        # Step 2: Execute sub-tasks through browser automation.
         try:
             agent = self._get_agent()
-        except ImportError as e:
-            emit(str(e), "System", "error")
+        except ImportError as exc:
+            emit(str(exc), "System", "error")
             return self._local_fallback(task)
 
         results = []
         for subtask in sorted(subtasks, key=lambda x: x.get("priority", 99)):
-            task_type   = subtask["type"]
+            task_type = subtask["type"]
             description = subtask["description"]
-            model_list  = get_model_list(task_type)
-            best_model  = get_model_info(model_list[0])["name"]
+            model_list = get_model_list(task_type)
+            best_model = get_model_info(model_list[0])["name"]
 
-            emit(f"Sub-task: {task_type} — {description[:50]}…", best_model, "thinking")
+            emit(
+                f"Sub-task: {task_type} — {description[:50]}...",
+                best_model,
+                "thinking",
+            )
 
-            # Build the prompt for this sub-task
             prompt = (
                 f"You are working on a specific part of a larger project.\n\n"
                 f"Overall project: {task}\n\n"
@@ -97,8 +117,8 @@ class VantaOrchestrator:
                 f"Be thorough and include all necessary code."
             )
 
-            def on_progress(step, model, status, result=None):
-                emit(step, model, status, result)
+            def on_progress(step, model_name, status, result=None):
+                emit(step, model_name, status, result)
 
             response, model_used = agent.send_with_failover(
                 model_priority=model_list,
@@ -106,22 +126,28 @@ class VantaOrchestrator:
                 on_progress=on_progress,
             )
 
-            results.append({
-                "type":     task_type,
-                "desc":     description,
-                "model":    model_used,
-                "response": response,
-            })
-            emit(f"✓ {task_type} done (via {model_used})", model_used, "done")
+            results.append(
+                {
+                    "type": task_type,
+                    "desc": description,
+                    "model": model_used,
+                    "response": response,
+                }
+            )
+            emit(
+                f"✓ {task_type} done (via {model_used})",
+                model_used,
+                "done",
+            )
 
-        # ── Step 3: Merge ─────────────────────────────────────────────────────
-        emit("Merging all results…", "Vanta", "thinking")
+        # Step 3: Merge
+        emit("Merging all results...", "Vanta", "thinking")
         merged = self._merge(task, results)
         emit("Merge complete.", "Vanta", "done")
         return merged
 
     def _merge(self, task: str, results: list[dict]) -> str:
-        """Use Groq to intelligently merge all sub-task outputs."""
+        """Use the configured R1/OpenRouter model (or legacy provider) to merge."""
         results_text = "\n\n".join(
             f"[{r['type'].upper()} — via {r['model']}]\n{r['response']}"
             for r in results
@@ -129,25 +155,31 @@ class VantaOrchestrator:
         prompt = MERGE_PROMPT.format(task=task, results=results_text)
 
         try:
-            resp = self.groq.chat.completions.create(
-                model=self.model,
+            resp = self.merge_client.chat.completions.create(
+                model=self.merge_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096,
                 temperature=0.2,
             )
             return resp.choices[0].message.content
-        except Exception as e:
-            # Fallback: just concatenate
-            parts = [f"### {r['type'].upper()} (via {r['model']})\n{r['response']}" for r in results]
+        except Exception:
+            # Safe fallback: preserve every result if the merge provider fails.
+            parts = [
+                f"### {r['type'].upper()} (via {r['model']})\n{r['response']}"
+                for r in results
+            ]
             return "\n\n---\n\n".join(parts)
 
     def _local_fallback(self, task: str) -> str:
-        """Handle simple tasks directly via Groq (no browser needed)."""
+        """Handle simple tasks directly through the legacy provider."""
         resp = self.groq.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "You are Vanta, a premium AI coding assistant."},
-                {"role": "user",   "content": task},
+                {
+                    "role": "system",
+                    "content": "You are Vanta, a premium AI coding assistant.",
+                },
+                {"role": "user", "content": task},
             ],
             max_tokens=4096,
             temperature=0.2,
