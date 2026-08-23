@@ -12,7 +12,7 @@ MODELS = {
         "url":    "https://claude.ai/new",
         "name":   "Claude",
         "input_sel":    'div[contenteditable="true"].ProseMirror',
-        "send_sel":     'button[aria-label="Send message"]',
+        "send_sel":      'button[aria-label="Send message"]',
         "response_sel": '.font-claude-message',
         "rate_limit_texts": [
             "reached your usage limit",
@@ -26,7 +26,7 @@ MODELS = {
         "url":    "https://chatgpt.com/",
         "name":   "ChatGPT",
         "input_sel":    'textarea[placeholder]',
-        "send_sel":     'button[data-testid="send-button"]',
+        "send_sel":      'button[data-testid="send-button"]',
         "response_sel": '[data-message-author-role="assistant"] .markdown',
         "rate_limit_texts": [
             "reached the GPT-4o limit",
@@ -40,7 +40,7 @@ MODELS = {
         "url":    "https://gemini.google.com/app",
         "name":   "Gemini",
         "input_sel":    'rich-textarea div[contenteditable="true"]',
-        "send_sel":     'button[aria-label="Send message"]',
+        "send_sel":      'button[aria-label="Send message"]',
         "response_sel": '.model-response .response-content',
         "rate_limit_texts": [
             "rate limit",
@@ -53,7 +53,7 @@ MODELS = {
         "url":    "https://chat.deepseek.com/",
         "name":   "DeepSeek",
         "input_sel":    'textarea',
-        "send_sel":     'button[type="submit"]',
+        "send_sel":      'button[type="submit"]',
         "response_sel": '.ds-markdown',
         "rate_limit_texts": [
             "rate limit",
@@ -66,7 +66,7 @@ MODELS = {
         "url":    "https://www.perplexity.ai/",
         "name":   "Perplexity",
         "input_sel":    'textarea[placeholder]',
-        "send_sel":     'button[aria-label="Submit"]',
+        "send_sel":      'button[aria-label="Submit"]',
         "response_sel": '.prose',
         "rate_limit_texts": [
             "rate limit",
@@ -79,28 +79,28 @@ MODELS = {
 # ━━━ Priority routing table ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Best model first — orchestrator tries them in order on rate-limit failover
 PRIORITIES: dict[str, list[str]] = {
-    "ui":         ["claude",     "chatgpt",  "gemini"],
-    "auth":       ["claude",     "chatgpt",  "deepseek"],
-    "database":   ["chatgpt",    "deepseek", "claude"],
-    "security":   ["claude",     "perplexity", "chatgpt"],
-    "backend":    ["deepseek",   "chatgpt",  "claude"],
-    "research":   ["perplexity", "gemini",   "claude"],
-    "code":       ["deepseek",   "chatgpt",  "claude"],
-    "devops":     ["chatgpt",    "deepseek", "claude"],
-    "other":      ["claude",     "chatgpt",  "gemini"],
+    "ui":          ["claude",     "chatgpt",  "gemini"],
+    "auth":        ["claude",     "chatgpt",  "deepseek"],
+    "database":    ["chatgpt",    "deepseek", "claude"],
+    "security":    ["claude",     "perplexity", "chatgpt"],
+    "backend":     ["deepseek",   "chatgpt",  "claude"],
+    "research":    ["perplexity", "gemini",   "claude"],
+    "code":        ["deepseek",   "chatgpt",  "claude"],
+    "devops":      ["chatgpt",    "deepseek", "claude"],
+    "other":       ["claude",     "chatgpt",  "gemini"],
 }
 
 # Free OpenRouter models used for default subtask execution.
 FREE_MODEL_PRIORITIES: dict[str, list[str]] = {
-    "ui":         ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "auth":       ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "database":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "security":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "backend":    ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "research":   ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "code":       ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "devops":     ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
-    "other":      ["poolside/laguna-s-2.1:free", "google/gemini-2.0-flash-exp:free"],
+    "security": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
+    "database": ["nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-super-120b-a12b:free"],
+    "backend": ["z-ai/glm-5.2:free", "nvidia/nemotron-3-super-120b-a12b:free"],
+    "devops": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
+    "code": ["z-ai/glm-5.2:free", "nvidia/nemotron-3-super-120b-a12b:free"],
+    "research": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
+    "ui": ["google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3.5-lightning:free"],
+    "auth": ["nvidia/nemotron-3-super-120b-a12b:free", "z-ai/glm-5.2:free"],
+    "other": ["google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3-ultra-550b-a55b:free"],
 }
 
 
@@ -117,6 +117,6 @@ def get_model_info(model_key: str) -> dict:
 def is_rate_limited(page_text: str, model_key: str) -> bool:
     """Check if the page text signals a rate limit for this model."""
     model = MODELS.get(model_key, {})
-    sigs  = model.get("rate_limit_texts", [])
+    sigs = model.get("rate_limit_texts", [])
     lower = page_text.lower()
     return any(sig.lower() in lower for sig in sigs)
