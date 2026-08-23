@@ -16,8 +16,12 @@ this one feature rather than used as the project's main model.
 """
 
 import base64
+import os
 import time
 from pathlib import Path
+
+from orchestrator.openrouter_router import OpenRouterClient
+
 
 VISION_MODEL = "qwen/qwen3.6-27b"
 
@@ -86,6 +90,27 @@ def _critique_screenshots(groq_client, shot1: bytes, shot2: bytes) -> str:
         return f"[Visual critique unavailable: {e}]"
 
 
+def _critique_screenshots_openrouter(
+    openrouter_client: OpenRouterClient, shot1: bytes, shot2: bytes
+) -> str:
+    b64_1 = base64.b64encode(shot1).decode()
+    b64_2 = base64.b64encode(shot2).decode()
+    content = [
+        {"type": "text", "text": "Screenshot 1 — page load:"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_1}"}},
+        {"type": "text", "text": "Screenshot 2 — ~500ms later:"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_2}"}},
+    ]
+    result, _model = openrouter_client.execute(
+        "Compare the supplied screenshots and report only real visual issues.",
+        "ui_critique",
+        content=content,
+        model_override=os.getenv("VISION_CRITIQUE_MODEL", "").strip() or None,
+        system_prompt=VISUAL_CRITIQUE_SYSTEM,
+    )
+    return result
+
+
 def run_visual_critique(groq_client, file_path: str):
     """Full pipeline: screenshot -> vision critique.
     Returns the critique text, or None if screenshots couldn't be taken
@@ -93,4 +118,14 @@ def run_visual_critique(groq_client, file_path: str):
     shots = _screenshot_pair(file_path)
     if not shots:
         return None
+
+    try:
+        openrouter_client = OpenRouterClient.from_env()
+        if openrouter_client is not None:
+            return _critique_screenshots_openrouter(
+                openrouter_client, shots[0], shots[1]
+            )
+    except Exception as e:
+        print(f"[Visual critique] OpenRouter failed, falling back to Groq: {e}")
+
     return _critique_screenshots(groq_client, shots[0], shots[1])
