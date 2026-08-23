@@ -9,6 +9,7 @@ rate-limit handoff behavior.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -16,8 +17,26 @@ from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_FLASH_MODEL = "google/gemini-2.0-flash-exp:free"
+DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+DEFAULT_BRAIN_FALLBACK_MODEL = "deepseek/deepseek-r1:free"
+
+
 class OpenRouterError(RuntimeError):
     """Raised when an OpenRouter request cannot be completed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class _Completions:
@@ -50,11 +69,13 @@ class _Chat:
 
 
 class OpenRouterClient:
-    """OpenRouter client with Flash for fast calls and R1 for deep calls.
+    """OpenRouter client with Flash for fast calls and a brain failover path.
 
     The public ``chat.completions.create`` shape intentionally matches the
     client already used by Vanta, so the API path is additive and does not
-    require changes to the browser automation implementation.
+    require changes to the browser automation implementation. Brain requests
+    transparently retry on the configured fallback for transient provider
+    failures; callers continue to receive the same response shape.
     """
 
     COMPLEX_TASK_TYPES = frozenset(
@@ -66,8 +87,9 @@ class OpenRouterClient:
         api_key: str,
         *,
         base_url: str = "https://openrouter.ai/api/v1",
-        flash_model: str = "google/gemini-2.0-flash-exp:free",
-        brain_model: str = "deepseek/deepseek-r1:free",
+        flash_model: str = DEFAULT_FLASH_MODEL,
+        brain_model: str = DEFAULT_BRAIN_MODEL,
+        brain_fallback_model: str = DEFAULT_BRAIN_FALLBACK_MODEL,
         timeout: float = 90.0,
         http_referer: str = "http://localhost",
         app_title: str = "Vanta",
@@ -76,6 +98,7 @@ class OpenRouterClient:
         self.base_url = base_url.rstrip("/")
         self.flash_model = flash_model
         self.brain_model = brain_model
+        self.brain_fallback_model = brain_fallback_model
         self.timeout = timeout
         self.http_referer = http_referer
         self.app_title = app_title
@@ -90,14 +113,11 @@ class OpenRouterClient:
             return None
         return cls(
             api_key,
-            base_url=os.getenv(
-                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-            ),
-            flash_model=os.getenv(
-                "OPENROUTER_FLASH_MODEL", "google/gemini-2.0-flash-exp:free"
-            ),
-            brain_model=os.getenv(
-                "OPENROUTER_BRAIN_MODEL", "deepseek/deepseek-r1:free"
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            flash_model=os.getenv("OPENROUTER_FLASH_MODEL", DEFAULT_FLASH_MODEL),
+            brain_model=os.getenv("OPENROUTER_BRAIN_MODEL", DEFAULT_BRAIN_MODEL),
+            brain_fallback_model=os.getenv(
+                "OPENROUTER_BRAIN_FALLBACK_MODEL", DEFAULT_BRAIN_FALLBACK_MODEL
             ),
             timeout=float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "90")),
             http_referer=os.getenv("OPENROUTER_HTTP_REFERER", "http://localhost"),
@@ -110,7 +130,7 @@ class OpenRouterClient:
         *,
         complexity: Optional[str] = None,
     ) -> str:
-        """Choose Flash for routine work and R1 for complex reasoning."""
+        """Choose Flash for routine work and the configured brain for reasoning."""
         if complexity in {"complex", "deep", "hard"}:
             return self.brain_model
         if task_type and task_type.lower() in self.COMPLEX_TASK_TYPES:
@@ -126,7 +146,52 @@ class OpenRouterClient:
         temperature: Optional[float] = 0.2,
         **extra: Any,
     ) -> SimpleNamespace:
-        """Call ``/chat/completions`` and return a compatible response object."""
+        """Call ``/chat/completions`` with transparent brain failover."""
+        models = [model]
+        if model == self.brain_model and self.brain_fallback_model != model:
+            models.append(self.brain_fallback_model)
+
+        last_error: Optional[OpenRouterError] = None
+        for attempt, requested_model in enumerate(models):
+            try:
+                response = self._complete_once(
+                    model=requested_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    extra=extra,
+                )
+                logger.info(
+                    "OpenRouter request served by model=%s (requested_model=%s)",
+                    requested_model,
+                    model,
+                )
+                return response
+            except OpenRouterError as exc:
+                last_error = exc
+                has_fallback = attempt + 1 < len(models)
+                if not (has_fallback and exc.retryable):
+                    raise
+                logger.warning(
+                    "OpenRouter brain model=%s failed with %s; transparently "
+                    "failing over to brain fallback model=%s",
+                    model,
+                    exc,
+                    self.brain_fallback_model,
+                )
+
+        # The loop always returns or raises, but keep a useful type-safe guard.
+        raise last_error or OpenRouterError("OpenRouter request failed")
+
+    def _complete_once(
+        self,
+        *,
+        model: str,
+        messages: list[Mapping[str, str]],
+        max_tokens: int,
+        temperature: Optional[float],
+        extra: Mapping[str, Any],
+    ) -> SimpleNamespace:
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -152,11 +217,17 @@ class OpenRouterClient:
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            retryable = exc.code == 429 or 500 <= exc.code <= 599
             raise OpenRouterError(
-                f"OpenRouter HTTP {exc.code}: {detail[:500]}"
+                f"OpenRouter HTTP {exc.code}: {detail[:500]}",
+                status_code=exc.code,
+                retryable=retryable,
             ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise OpenRouterError(f"OpenRouter request failed: {exc}") from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            raise OpenRouterError(
+                f"OpenRouter request failed: {exc}",
+                retryable=True,
+            ) from exc
 
         try:
             data = json.loads(raw)

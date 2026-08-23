@@ -48,6 +48,8 @@ class VantaOrchestrator:
             self.analysis_client = self.openrouter
             self.analysis_model = self.openrouter.flash_model
             self.merge_client = self.openrouter
+            # OpenRouter owns transparent Nemotron -> DeepSeek R1 failover;
+            # keep the existing analysis/merge wiring unchanged.
             self.merge_model = self.openrouter.brain_model
         else:
             self.analysis_client = groq_client
@@ -147,7 +149,7 @@ class VantaOrchestrator:
         return merged
 
     def _merge(self, task: str, results: list[dict]) -> str:
-        """Use the configured R1/OpenRouter model (or legacy provider) to merge."""
+        """Use the configured brain model; its client handles transparent failover."""
         results_text = "\n\n".join(
             f"[{r['type'].upper()} — via {r['model']}]\n{r['response']}"
             for r in results
