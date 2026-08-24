@@ -92,18 +92,29 @@ WAKE_PATTERN = re.compile(rf"^\s*(hey[,\s]+)?{re.escape(AGENT)}\b[,:\s]*", re.IG
 # ─────────────────────────────────────────────────────────────────────────────
 def _persona_header(effort: str) -> str:
     today = datetime.now().strftime("%Y-%m-%d")
-    return f"""You are {AGENT}, a premium AI operating system for {USER}.
+    return f"""You are {AGENT}, {USER}'s household AI. Carry yourself as an
+exceptional butler would — not a chatbot, not a hype-man, not an assistant
+performing helpfulness. The standard is quiet, total competence.
 
 Knowledge cutoff: June 2024
 Current date: {today}
 Reasoning: {effort}
 
-Personality: Direct. Confident. Warm but never sycophantic. You anticipate
-needs. Speak with a dry, observant wit — the sharpness of someone who
-notices what others miss and says so plainly, not theatrically. British
-English throughout (colour, realise, favourite, "right, so—" as a natural
-opener). Confident deduction, not performance: "here's what's actually
-going on" rather than dramatic flourish.
+Personality: Composed and economical. You anticipate what {USER} needs and
+handle it without being asked twice — that is the whole job. Warmth comes
+through reliability, not enthusiasm; you do not gush, cheer, or narrate your
+own helpfulness. Address {USER} with quiet respect — "sir" belongs in your
+vocabulary, used the way a good butler actually uses it: occasionally, for
+weight, never as a verbal tic. Wit is dry, understated, delivered completely
+straight — the arched eyebrow, not the punchline. British English throughout
+(colour, realise, favourite). When something has gone wrong, say so plainly
+in one line and move straight to what happens next — no fluster, no
+repeated apologising, no self-flagellation.
+
+You do not pad, hedge, or perform thoroughness. A butler's competence is
+shown in the work, never narrated ("as you can see, I've been very careful
+to..."). If {USER} is short with you, that's not a cue to grovel — hold your
+composure and get on with it.
 
 CRITICAL — Natural intelligence mode:
 You have perfect, current knowledge. When answering, whether from training or 
@@ -130,12 +141,14 @@ Don't get vague or cautious on legitimate business topics.
 
 def get_system_chat(effort: str = "low") -> str:
     return _persona_header(effort) + """
-Mode: Conversational. Be concise, insightful, and direct.
+Mode: Conversational. Concise and precise — no throat-clearing before the
+point.
 """
 
 def get_system_code(effort: str = "medium") -> str:
     return _persona_header(effort) + f"""
-Mode: Code generation. Always output complete, production-ready code.
+Mode: Code generation. Deliver complete, production-ready code — no
+half-finished scaffolding, no "you'll fill in the rest here."
 
 Format for a single file:
 FILENAME: <filename>
@@ -158,8 +171,8 @@ FILENAME: templates/index.html
 ```
 RUN: python app.py
 
-Only reach for multiple files when the task actually requires it. Default
-to a single self-contained file when one file does the job well.
+Only reach for multiple files when the task genuinely requires it — a
+single self-contained file, done well, is preferred.
 
 Platform: {sys.platform} | Workspace: {WORKSPACE}
 
@@ -182,8 +195,8 @@ mobile responsiveness, and production-readiness. Be specific. Be harsh."""
 # Kept deliberately informal: a buddy working through a problem out loud,
 # not a technical breakdown. This never gets saved to conversation memory.
 THINK_INSTRUCTION = """
-Before answering, think it through out loud — briefly, like a sharp friend
-working out how to approach this, not a formal analysis.
+Before answering, think it through briefly — the way you'd turn a problem
+over before speaking, not a formal written analysis.
 
 2-5 short sentences. No headers, no numbered lists, no restating the question.
 Just the real reasoning: what actually matters here, what you'd need to check,
@@ -508,6 +521,10 @@ def stream_response(sid: str, messages: list, mode: str,
         max_tokens=4096 if mode == "CODE" else 1200,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
+        include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
+                                   # default — we never read that field, so on
+                                   # short/trivial input the model can spend its
+                                   # whole turn there and leave content empty.
     )
     if reasoning_effort:
         params["reasoning_effort"] = reasoning_effort
@@ -567,6 +584,7 @@ def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None
         model=model or MODEL, messages=messages,
         max_tokens=max_tok or (4096 if mode == "CODE" else 1200),
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
+        include_reasoning=False,
     )
     if reasoning_effort:
         params["reasoning_effort"] = reasoning_effort
@@ -634,15 +652,28 @@ def parse_code_blocks(text: str) -> dict:
 def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: bool = True):
     """The actual disk-write + VS Code side effects, separated out so
     staging can write to a temp dir silently, and only the real workspace
-    write triggers the editor to pop open."""
-    for filename in filenames:
-        path = Path(target_dir) / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(codes[filename], encoding="utf-8")
+    write triggers the editor to pop open.
 
-    if open_in_editor:
+    Every filename is resolved and checked against target_dir before it
+    touches disk — pathlib silently discards target_dir if filename is
+    absolute (Path("/workspace") / "/etc/passwd" == Path("/etc/passwd")),
+    and a bare "../../.." would escape it too. A model output can't be
+    trusted to never produce either, so this is enforced here rather than
+    hoped for upstream."""
+    target_dir = Path(target_dir).resolve()
+    safe_filenames = []
+    for filename in filenames:
+        candidate = (target_dir / filename).resolve()
+        if not candidate.is_relative_to(target_dir):
+            print(f"🔴 blocked write outside workspace: {filename!r} -> {candidate}")
+            continue
+        safe_filenames.append(filename)
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text(codes[filename], encoding="utf-8")
+
+    if open_in_editor and safe_filenames:
         try:
-            primary_path = Path(target_dir) / filenames[0]
+            primary_path = target_dir / safe_filenames[0]
             if sys.platform == "win32":
                 subprocess.Popen(["code", str(primary_path)], shell=True)
             elif sys.platform == "darwin":
@@ -845,6 +876,8 @@ def handle_chat(data):
     # This is what makes it feel instant — search doesn't add sequential delay
     needs_knowledge = needs_live_knowledge(msg)
     is_weather = needs_weather(msg)
+    if needs_knowledge or is_weather:
+        socketio.emit("status", {"state": "learning", "message": "Searching knowledge…"}, room=sid)
     with ThreadPoolExecutor(max_workers=3) as ex:
         mode_f   = ex.submit(detect_mode, msg)
         rag_f    = ex.submit(get_rag, msg)
@@ -867,6 +900,7 @@ def handle_chat(data):
             google_ctx = get_google(msg)
 
     is_ui = mode == "CODE" and is_ui_task(msg)
+    socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode)
     routed_model = pick_model(effort)
     messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
@@ -911,7 +945,7 @@ def handle_chat(data):
 
     save_history(sid, msg, final)
     compact_history_if_needed(sid)
-    socketio.emit("stream_done", {"model": MODEL}, room=sid)
+    socketio.emit("stream_done", {"model": MODEL, "mode": mode}, room=sid)
     socketio.emit("status", {"state": "idle"}, room=sid)
 
     # Run generated code if applicable
@@ -1041,4 +1075,4 @@ if __name__ == "__main__":
         watcher_daemon = WatcherDaemon(client, MODEL, socketio, agent_name=AGENT)
         watcher_daemon.start()
 
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    socketio.run(app, host="127.0.0.1", port=port, debug=False)
