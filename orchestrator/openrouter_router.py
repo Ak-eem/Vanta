@@ -17,14 +17,14 @@ import urllib.request
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
-from .model_router import FREE_MODEL_PRIORITIES, VISION_MODEL_PRIORITIES
+from .model_router import FREE_MODEL_PRIORITIES
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLASH_MODEL = "google/gemini-2.0-flash-exp:free"
-DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a5b:free"
-DEFAULT_BRAIN_FALLBACK_MODEL = "deepseek/deepseek-r1:free"
+DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+DEFAULT_BRAIN_FALLBACK_MODEL = "z-ai/glm-5.2:free"
 
 
 class OpenRouterError(RuntimeError):
@@ -52,12 +52,12 @@ class _Completions:
         self,
         *,
         model: str,
-        messages: list[Mapping[str, Any]],
+        messages: list[Mapping[str, str]],
         max_tokens: int = 4096,
         temperature: Optional[float] = 0.2,
         **kwargs: Any,
     ) -> SimpleNamespace:
-        return self._client._complete(
+        return self._client.complete(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
@@ -148,48 +148,32 @@ class OpenRouterClient:
         task_type: str,
         callback: Optional[Any] = None,
         on_progress: Optional[Any] = None,
-        *,
-        content: Optional[Any] = None,
-        model_override: Optional[str] = None,
-        system_prompt: Optional[str] = None,
     ) -> tuple[str, str]:
-        """Execute a subtask through the configured priority list.
+        """Execute a subtask through the free OpenRouter priority list.
 
-        ``content`` may be a string or OpenAI-compatible content parts such as
-        ``{"type": "text", "text": "..."}`` and
-        ``{"type": "image_url", "image_url": {"url": "data:..."}}``.
-        Existing callers that only provide ``task_prompt`` continue to send a
-        normal text message. A model override is attempted first, followed by
-        the remaining task-specific priority models.
+        Each candidate is sent through the existing ``complete`` path. Network
+        errors, timeouts, HTTP 429s, and HTTP 5xx responses are retryable, so
+        execution fails over to the next free model. The existing brain to
+        brain-fallback behavior remains owned by ``complete``.
         """
         progress = on_progress or callback
-        priorities = (
-            VISION_MODEL_PRIORITIES
-            if task_type in VISION_MODEL_PRIORITIES
-            else FREE_MODEL_PRIORITIES
+        models = FREE_MODEL_PRIORITIES.get(
+            task_type, FREE_MODEL_PRIORITIES["other"]
         )
-        models = list(priorities.get(task_type, FREE_MODEL_PRIORITIES["other"]))
-        if model_override:
-            models = [model_override] + [model for model in models if model != model_override]
-
-        messages: list[Mapping[str, Any]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": task_prompt if content is None else content})
         last_error: Optional[OpenRouterError] = None
 
         for index, model in enumerate(models):
             if progress:
                 progress(model, "trying", None)
             try:
-                response = self.chat.completions.create(
+                response = self.complete(
                     model=model,
-                    messages=messages,
+                    messages=[{"role": "user", "content": task_prompt}],
                 )
-                result = response.choices[0].message.content
+                content = response.choices[0].message.content
                 if progress:
-                    progress(model, "done", result)
-                return result, model
+                    progress(model, "done", content)
+                return content, model
             except OpenRouterError as exc:
                 last_error = exc
                 logger.warning(
@@ -208,7 +192,7 @@ class OpenRouterClient:
         self,
         *,
         model: str,
-        messages: list[Mapping[str, Any]],
+        messages: list[Mapping[str, str]],
         max_tokens: int = 4096,
         temperature: Optional[float] = 0.2,
         **extra: Any,
@@ -242,18 +226,19 @@ class OpenRouterClient:
                 logger.warning(
                     "OpenRouter brain model=%s failed with %s; transparently "
                     "failing over to brain fallback model=%s",
-                    model,
+                    requested_model,
                     exc,
                     self.brain_fallback_model,
                 )
 
+        # The loop always returns or raises, but keep a useful type-safe guard.
         raise last_error or OpenRouterError("OpenRouter request failed")
 
     def _complete_once(
         self,
         *,
         model: str,
-        messages: list[Mapping[str, Any]],
+        messages: list[Mapping[str, str]],
         max_tokens: int,
         temperature: Optional[float],
         extra: Mapping[str, Any],
@@ -316,23 +301,6 @@ class OpenRouterClient:
                 )
             ],
             usage=data.get("usage"),
-        )
-
-    def _complete(
-        self,
-        *,
-        model: str,
-        messages: list[Mapping[str, Any]],
-        max_tokens: int,
-        temperature: Optional[float],
-        **extra: Any,
-    ) -> SimpleNamespace:
-        return self.complete(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            **extra,
         )
 
 
