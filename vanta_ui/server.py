@@ -6,7 +6,7 @@ VANTA Server v4 — Natural Intelligence Mode
 - Parallel classify + search before LLM call to minimize latency
 """
 
-import os, re, sys, time, json, subprocess
+import os, re, sys, time, json, subprocess, tempfile, uuid
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -695,7 +695,6 @@ def parse_file(text: str, sid: str) -> dict:
 # a private temp directory first, iterate on failures there where nothing
 # is visible or "real" yet, and only copy the verified-working version into
 # the actual workspace once it actually runs clean.
-import tempfile
 STAGING_DIR = Path(tempfile.gettempdir()) / "vanta_staging"
 
 def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: str,
@@ -1045,7 +1044,7 @@ def transcribe():
     f = request.files.get("audio")
     if not f:
         return jsonify({"error": "No audio"}), 400
-    tmp = Path("/tmp/vanta_ptt.webm")
+    tmp = Path(tempfile.gettempdir()) / f"vanta_ptt_{uuid.uuid4().hex}.webm"
     f.save(str(tmp))
     try:
         with open(tmp, "rb") as fp:
