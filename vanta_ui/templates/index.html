@@ -705,7 +705,7 @@
     if (marker && slot) slot.appendChild(marker); // relocate to under the finished text
     if (marker) {
       marker.classList.remove('active');
-      marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
+      marker.style.display = 'block'; marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
     }
   });
 
@@ -719,7 +719,7 @@
     if (marker && slot) slot.appendChild(marker);
     if (marker) {
       marker.classList.remove('active');
-      marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
+      marker.style.display = 'block'; marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
     }
   });
 
@@ -732,7 +732,7 @@
     if (marker && slot) slot.appendChild(marker);
     if (marker) {
       marker.classList.remove('active');
-      marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
+      marker.style.display = 'block'; marker.style.opacity = '0.4'; marker.style.transform = 'scale(0.75)';
     }
   });
 
@@ -792,7 +792,7 @@
 
     setState('thinking');
     streamBuffer = '';
-    miniMarker.classList.add('active');
+    miniMarker.style.display = 'block'; miniMarker.classList.add('active');
 
     socket.emit('chat', { message: text, think: false });
   }
