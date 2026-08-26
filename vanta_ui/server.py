@@ -15,9 +15,16 @@ from flask_socketio import SocketIO, emit
 from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
 
-from checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
-                        wants_checklist, wants_legal_draft)
-from visual_critique import run_visual_critique
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    from .checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
+                            wants_checklist, wants_legal_draft)
+    from .visual_critique import run_visual_critique
+except ImportError:
+    from checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
+                           wants_checklist, wants_legal_draft)
+    from visual_critique import run_visual_critique
 
 WATCHER_OK = False
 try:
