@@ -6,7 +6,7 @@ VANTA Server v4 — Natural Intelligence Mode
 - Parallel classify + search before LLM call to minimize latency
 """
 
-import os, re, sys, time, json, subprocess, tempfile, uuid
+import os, re, sys, time, json, shlex, subprocess, tempfile, uuid
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -656,6 +656,28 @@ def parse_code_blocks(text: str) -> dict:
         "run_cmd": run.group(1).strip() if run else None,
     }
 
+def parse_run_command(cmd: str) -> list[str]:
+    """Parse a RUN command without allowing shell control syntax."""
+    if not cmd or not cmd.strip():
+        raise ValueError("RUN is empty")
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=";|&<>`\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as exc:
+        raise ValueError(f"malformed RUN quoting: {exc}") from exc
+    punctuation = set(lexer.punctuation_chars) | {"\n"}
+    if any(token and all(char in punctuation for char in token) for token in tokens):
+        raise ValueError(
+            "RUN command contains shell chaining; use one executable and "
+            "arguments without ;, |, &, <, >, `, or newlines."
+        )
+    try:
+        return shlex.split(cmd)
+    except ValueError as exc:
+        raise ValueError(f"malformed RUN quoting: {exc}") from exc
+
 def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: bool = True):
     """The actual disk-write + VS Code side effects, separated out so
     staging can write to a temp dir silently, and only the real workspace
@@ -712,13 +734,14 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
 
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     filenames, codes, run_cmd = parsed["filenames"], parsed["codes"], parsed["run_cmd"]
+    argv = parse_run_command(run_cmd)
     write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
 
     log = []
     for attempt in range(1, max_attempts + 1):
         try:
             result = subprocess.run(
-                run_cmd, shell=True, cwd=str(STAGING_DIR),
+                argv, shell=False, cwd=str(STAGING_DIR),
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
@@ -757,15 +780,17 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
         if fixed["saved"]:
             filenames, codes = fixed["filenames"], fixed["codes"]
             run_cmd = fixed["run_cmd"] or run_cmd
+            argv = parse_run_command(run_cmd)
             write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
 
     return {"success": False, "attempts": max_attempts, "log": log}
 
 def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
+    argv = parse_run_command(cmd)
     for attempt in range(retries):
         try:
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                argv, shell=False, capture_output=True,
                 text=True, timeout=30, cwd=WORKSPACE,
             )
             if proc.returncode == 0:
