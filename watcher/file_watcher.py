@@ -1,0 +1,134 @@
+"""
+File + Git watcher — monitors configured project paths for merge
+conflicts, uncommitted work sitting too long, and (optionally) test
+failures. Silent on success by design — it only speaks up when
+something actually needs attention.
+"""
+
+import subprocess
+import time
+import threading
+from pathlib import Path
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+UNCOMMITTED_THRESHOLD_HOURS = 4
+GIT_CHECK_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+class _DebouncedHandler(FileSystemEventHandler):
+    """Watchdog fires multiple events per save on some editors/OSes —
+    this collapses repeats within a short window."""
+
+    def __init__(self, debounce_seconds: float = 3):
+        self.debounce_seconds = debounce_seconds
+        self._last_fired: dict[str, float] = {}
+
+    def on_modified(self, event):
+        if event.is_directory:
+            return
+        now = time.time()
+        if now - self._last_fired.get(event.src_path, 0) < self.debounce_seconds:
+            return
+        self._last_fired[event.src_path] = now
+        # Reserved hook — a single save isn't alert-worthy on its own,
+        # but this is where a future quick-lint-on-save could plug in.
+
+
+class FileWatcher:
+    def __init__(self, projects: list[dict], on_alert):
+        """
+        projects: [{"path": str, "test_command": str|None, "test_interval_min": int}]
+        on_alert: callback(severity, title, message, source)
+        """
+        self.projects = [p for p in projects if Path(p.get("path", "")).is_dir()]
+        self.on_alert = on_alert
+        self._observer = Observer()
+        self._uncommitted_since: dict[str, float] = {}
+        self._stop = threading.Event()
+
+    def start(self):
+        for proj in self.projects:
+            self._observer.schedule(_DebouncedHandler(), proj["path"], recursive=True)
+        if self.projects:
+            self._observer.start()
+        threading.Thread(target=self._git_loop, daemon=True).start()
+        threading.Thread(target=self._test_loop, daemon=True).start()
+
+    def stop(self):
+        self._stop.set()
+        if self.projects:
+            self._observer.stop()
+            self._observer.join()
+
+    # ── Git monitoring ───────────────────────────────────────────────
+    def _git_loop(self):
+        while not self._stop.is_set():
+            for proj in self.projects:
+                self._check_git(proj["path"])
+            self._stop.wait(GIT_CHECK_INTERVAL_SECONDS)
+
+    def _check_git(self, repo_path: str):
+        if not (Path(repo_path) / ".git").exists():
+            return
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_path, capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            return  # git not installed or not a repo — skip quietly
+
+        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        if not lines:
+            self._uncommitted_since.pop(repo_path, None)
+            return
+
+        conflicts = [l for l in lines if l.startswith("UU")]
+        if conflicts:
+            self.on_alert(
+                "high", "Merge conflict",
+                f"{len(conflicts)} file(s) unresolved in {Path(repo_path).name}",
+                source=repo_path,
+            )
+            return
+
+        first_seen = self._uncommitted_since.setdefault(repo_path, time.time())
+        hours = (time.time() - first_seen) / 3600
+        if hours >= UNCOMMITTED_THRESHOLD_HOURS:
+            self.on_alert(
+                "medium", "Uncommitted changes",
+                f"{len(lines)} file(s) uncommitted for {hours:.1f}h in {Path(repo_path).name}",
+                source=repo_path,
+            )
+
+    # ── Optional test/build monitoring (opt-in per project) ─────────
+    def _test_loop(self):
+        last_run: dict[str, float] = {}
+        while not self._stop.is_set():
+            now = time.time()
+            for proj in self.projects:
+                cmd = proj.get("test_command")
+                if not cmd:
+                    continue
+                interval = proj.get("test_interval_min", 15) * 60
+                if now - last_run.get(proj["path"], 0) >= interval:
+                    self._run_test(proj)
+                    last_run[proj["path"]] = now
+            self._stop.wait(60)
+
+    def _run_test(self, proj: dict):
+        try:
+            result = subprocess.run(
+                proj["test_command"], shell=True, cwd=proj["path"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout)[:200]
+                self.on_alert("high", "Tests failing",
+                               f"{Path(proj['path']).name}: {err}", source=proj["path"])
+        except subprocess.TimeoutExpired:
+            self.on_alert("medium", "Test run timed out",
+                           Path(proj["path"]).name, source=proj["path"])
+        except Exception:
+            pass

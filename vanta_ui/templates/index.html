@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vanta</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --blue-core:    #00e5ff;
+    --blue-accent:  #00c9e0;
+    --blue-dim:     #0a1a20;
+    --blue-deep:    #050308;
+    --blue-mid:     #14202a;
+    --app-bg:       #050308;
+    --border:       #1a1620;
+    --border-blue:  #14202a;
+    --text-dim:     #5a6b7a;
+    --text-mid:     #9aa5ad;
+    --text-bright:  #e8eef5;
+    --violet:       #b026ff;
+    --amber:        #ff9500;
+    --err:          #ff2d4d;
+    --font-mono:    'SF Mono', 'Fira Code', 'Fira Mono', monospace;
+  }
+
+  html, body { width: 100%; height: 100%; background: #000; color: #fff; font-family: var(--font-mono); overflow: hidden; }
+
+  #boot { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: #000; transition: opacity 0.7s ease; }
+  #boot-inner { width: 100%; max-width: 400px; padding: 0 36px; display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  #boot-header { font-size: 13px; letter-spacing: 0.3em; color: var(--text-dim); text-transform: uppercase; opacity: 0; transition: opacity 0.6s ease; }
+  .bmod { display: flex; justify-content: space-between; align-items: center; opacity: 0; transform: translateY(6px); transition: opacity 0.45s ease, transform 0.45s ease; }
+  .bmod-name { font-size: 12px; color: var(--text-mid); letter-spacing: 0.04em; }
+  .bmod-status { font-size: 11px; color: #4b4b4b; }
+  #boot-modules { display: flex; flex-direction: column; gap: 14px; width: 100%; }
+  #boot-bar-wrap { width: 100%; display: flex; flex-direction: column; gap: 10px; opacity: 0; transform: translateY(6px); transition: opacity 0.5s ease, transform 0.5s ease; }
+  #boot-track { width: 100%; height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; position: relative; }
+  #boot-fill { height: 100%; width: 0%; background: #fff; border-radius: 2px; position: relative; }
+  #boot-fill::after { content: ''; position: absolute; top: 50%; right: 0; transform: translate(50%, -50%); width: 12px; height: 12px; border-radius: 50%; background: #fff; filter: blur(5px); opacity: 0.8; }
+  #boot-bar-meta { display: flex; justify-content: space-between; font-size: 11px; color: #6b6b6b; letter-spacing: 0.05em; }
+
+  #app { position: fixed; inset: 0; background: var(--app-bg); display: flex; flex-direction: column; opacity: 0; transition: opacity 0.6s ease; overflow: hidden; }
+
+  #topbar { height: 46px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; z-index: 10; }
+  #topbar-logo { font-size: 11px; letter-spacing: 0.35em; color: var(--text-dim); text-transform: uppercase; }
+  #topbar-right { display: flex; align-items: center; gap: 14px; }
+  #voice-toggle { background: #07151b; border: 1px solid #2a7d91; color: #9ff6ff; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.15em; padding: 5px 14px; border-radius: 20px; cursor: pointer; text-transform: uppercase; transition: all 0.3s ease; }
+  #voice-toggle:hover { border-color: var(--blue-accent); }
+  #status-dot { width: 6px; height: 6px; border-radius: 50%; background: #22d3ee; box-shadow: 0 0 6px #22d3ee; }
+
+  #main { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+  #text-mode { position: absolute; inset: 0; display: none; opacity: 0; transition: opacity 0.5s ease; }
+  #visual-canvas { border-top: 1px solid var(--border); padding: 12px 16px; flex-shrink: 0; }
+  #visual-canvas-label { font-size: 9px; letter-spacing: 0.15em; color: #222; text-transform: uppercase; margin-bottom: 10px; }
+  .card-b { background: var(--blue-deep); border: 1px solid var(--border-blue); border-radius: 10px; padding: 12px 14px; }
+  .card-b-eyebrow { font-size: 9px; color: #3a6a8a; letter-spacing: 0.1em; }
+  .card-b-value { font-size: 20px; color: var(--text-bright); margin-top: 4px; }
+  .card-b-footer { display: flex; justify-content: space-between; margin-top: 6px; border-top: 1px solid var(--border-blue); padding-top: 6px; }
+  .card-b-footer span { font-size: 9px; color: #3a6a8a; }
+
+  #right-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; transition: transform 0.5s ease, opacity 0.5s ease; }
+  #chat-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 6px; }
+  #chat-messages::-webkit-scrollbar { width: 3px; }
+  #chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .msg { max-width: 85%; }
+  .msg.user { align-self: flex-end; }
+  .msg-bubble { border-radius: 2px 10px 10px 10px; padding: 9px 13px; background: #0a1a2a; border: 1px solid var(--border-blue); }
+  .msg.user .msg-bubble { background: #1a1a1a; border-color: #262626; border-radius: 10px 2px 10px 10px; }
+  .msg:not(.user) .msg-bubble { background: none; border: none; padding: 0; }
+  .msg.assistant { align-self: flex-start; }
+  .msg-text { font-size: 12px; color: var(--text-bright); line-height: 1.65; }
+  .msg.user .msg-text { color: #999; }
+  .msg-text p { margin: 0 0 10px 0; }
+  .msg-text p:last-child { margin-bottom: 0; }
+  .msg-text strong { color: #fff; font-weight: 600; }
+  .msg-text em { color: #bcd; font-style: italic; }
+  .msg-text .md-inline-code { background: #0d1520; border: 1px solid var(--border-blue); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 11px; color: #4df0ff; }
+  .msg-text .md-code { background: #0a0e14; border: 1px solid var(--border-blue); border-radius: 6px; padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+  .msg-text .md-code code { font-family: var(--font-mono); font-size: 11px; color: #cde; white-space: pre; }
+  .msg-text .md-list { margin: 6px 0 10px 0; padding-left: 18px; }
+  .msg-text .md-list li { margin-bottom: 4px; }
+  #last-vanta { display: grid; position: relative; padding-bottom: 56px; min-height: 64px; }
+
+  .shine { background-image: linear-gradient(100deg, #3a5f7a 0%, #3a5f7a 35%, #a8d8ff 50%, #3a5f7a 65%, #3a5f7a 100%); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shineSweep 2.2s linear infinite; }
+  @keyframes shineSweep { 0% { background-position: 150% center; } 100% { background-position: -50% center; } }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #input-bar { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  #chat-input { flex: 1; background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-family: var(--font-mono); font-size: 12px; color: #ccc; outline: none; transition: border-color 0.2s; }
+  #chat-input:focus { border-color: var(--blue-dim); }
+  #chat-input::placeholder { color: #2a2a2a; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: #080808; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; flex-shrink: 0; }
+  .icon-btn:hover { border-color: var(--blue-dim); }
+
+  #ptt-btn { width: 84px; height: 84px; border-radius: 50%; border: 1px solid var(--blue-mid); background: #080808; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; touch-action: none; }
+  #ptt-btn:hover { border-color: var(--blue-accent); }
+  #ptt-btn.recording { border-color: var(--err); background: rgba(255,45,77,0.08); }
+  #ptt-label { font-size: 10px; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; margin-top: 12px; text-align: center; }
+
+  #mic-btn { border-radius: 50%; border-color: var(--blue-dim); }
+
+  #voice-mode { position: absolute; inset: 0; display: none; opacity: 0; transition: opacity 0.5s ease; }
+  #voice-hint-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 30px; gap: 14px; }
+  #voice-listening { display: flex; align-items: center; gap: 8px; }
+  .vbar { width: 2px; background: var(--blue-accent); border-radius: 1px; animation: vbarPulse 0.9s ease-in-out infinite; }
+  .vbar:nth-child(2) { animation-delay: 0.1s; } .vbar:nth-child(3) { animation-delay: 0.2s; } .vbar:nth-child(4) { animation-delay: 0.3s; } .vbar:nth-child(5) { animation-delay: 0.4s; }
+  @keyframes vbarPulse { 0%, 100% { height: 5px; opacity: 0.5; } 50% { height: 16px; opacity: 1; } }
+  #voice-hint-text { font-size: 9px; letter-spacing: 0.15em; color: #1a2a3a; text-transform: uppercase; }
+  .demo-btn { background: transparent; border: 1px solid var(--blue-mid); color: var(--blue-core); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; padding: 8px 16px; border-radius: 20px; cursor: pointer; transition: border-color 0.2s; }
+  .demo-btn:hover { border-color: var(--blue-accent); }
+  #demo-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+  #voice-shelf { position: absolute; bottom: 0; left: 0; right: 0; border-top: 1px solid var(--border-blue); background: #03080f; padding: 14px 20px; transform: translateY(100%); transition: transform 0.45s cubic-bezier(.2,.8,.3,1); }
+  #voice-shelf.open { transform: translateY(0); }
+
+  #big-visual { position: absolute; inset: 14px; border-radius: 10px; overflow: hidden; background: #0a1410; opacity: 0; pointer-events: none; transition: opacity 0.5s ease; }
+  #close-map-btn { position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+  #sphere-wrap { position: absolute; display: flex; flex-direction: column; align-items: center; z-index: 5; filter: brightness(1.28) drop-shadow(0 0 12px rgba(0,229,255,0.38)) drop-shadow(0 0 30px rgba(0,180,255,0.16)); transition: left 0.6s cubic-bezier(.3,.7,.3,1), top 0.6s cubic-bezier(.3,.7,.3,1), width 0.6s cubic-bezier(.3,.7,.3,1), height 0.6s cubic-bezier(.3,.7,.3,1); }
+  #sphere-wrap.pos-voice { left: 50%; top: 42%; width: 190px; height: 190px; transform: translate(-50%,-50%); }
+  #sphere-wrap.pos-pill { left: 9%; top: 89%; width: 44px; height: 44px; transform: translate(-50%,-50%); }
+  #sphere-canvas { display: block; width: 100%; height: 100%; }
+
+  #error-edge { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 68%, rgba(255,45,77,0.5) 100%); opacity: 0; z-index: 50; transition: opacity 0.3s ease; }
+
+  /* ── Presence Mode — the default view before a conversation starts ──── */
+  #presence-mode { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; padding: 24px; opacity: 1; transition: opacity 0.5s ease; }
+  #presence-mode.hidden { opacity: 0; pointer-events: none; }
+  #presence-greeting { font-size: 19px; color: var(--text-bright); text-align: center; opacity: 0.9; margin-top: 180px; }
+  #presence-input-bar { width: 100%; max-width: 460px; display: flex; gap: 8px; align-items: center; }
+  #presence-input { flex: 1; background: #0a0a0a; border: 1px solid var(--border); border-radius: 22px; padding: 12px 20px; font-family: var(--font-mono); font-size: 13px; color: #ccc; outline: none; text-align: center; transition: border-color 0.2s; }
+  #presence-input:focus { border-color: var(--blue-dim); }
+  #presence-input::placeholder { color: #333; }
+  #presence-send-btn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border); background: #080808; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: border-color 0.2s; flex-shrink: 0; }
+  #presence-send-btn:hover { border-color: var(--blue-dim); }
+
+  #sphere-wrap.pos-presence { left: 50%; top: 26%; width: 190px; height: 190px; transform: translate(-50%,-50%); }
+  #sphere-wrap.pos-conversation { left: 34px; top: 34px; width: 40px; height: 40px; transform: translate(0,0); }
+  #sphere-wrap.pos-response { width: 48px; height: 48px; transform: translate(0,0); pointer-events: none; }
+
+  /* ── Conversation Mode additions: learning indicator + workspace ────── */
+  #learn-indicator { display: none; font-size: 9px; letter-spacing: 0.15em; color: var(--amber); text-transform: uppercase; padding: 10px 16px 0; opacity: 0.85; flex-shrink: 0; }
+  #learn-indicator.active { display: block; }
+
+  #conversation-row { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  #workspace-panel { width: 0; flex-shrink: 0; border-left: 1px solid var(--border); overflow: hidden; transition: width 0.45s cubic-bezier(.3,.7,.3,1); display: flex; flex-direction: column; }
+  #workspace-panel.open { width: 340px; }
+  #workspace-header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 9px; letter-spacing: 0.15em; color: var(--text-dim); text-transform: uppercase; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; white-space: nowrap; }
+  #workspace-close { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  #workspace-close:hover { border-color: var(--err); color: var(--err); }
+  #workspace-content { flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 11px; line-height: 1.7; color: #cde; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+
+<div id="error-edge"></div>
+
+<div id="boot">
+  <div id="boot-inner">
+    <div id="boot-header">initializing</div>
+    <div id="boot-modules">
+      <div class="bmod" data-ready="true"><span class="bmod-name">UI</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-ready="true"><span class="bmod-name">Core</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-ready="{{ 'true' if rag_ok else 'false' }}"><span class="bmod-name">Knowledge</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-ready="false" data-status="standby"><span class="bmod-name">Voice Engine</span><span class="bmod-status">···</span></div>
+    </div>
+    <div id="boot-bar-wrap">
+      <div id="boot-track"><div id="boot-fill"></div></div>
+      <div id="boot-bar-meta"><span id="boot-status">booting</span><span id="boot-pct">0%</span></div>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+  <div id="topbar">
+    <div id="topbar-logo">vanta</div>
+    <div id="topbar-right">
+      <button id="voice-toggle">voice mode</button>
+      <div id="status-dot"></div>
+    </div>
+  </div>
+
+  <div id="main">
+
+    <div id="presence-mode">
+      <div id="presence-greeting"></div>
+      <div id="presence-input-bar">
+        <input id="presence-input" type="text" placeholder="Ask Vanta anything..." autocomplete="off">
+        <button id="presence-send-btn" title="Send" aria-label="Send message">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="text-mode">
+      <div id="right-panel">
+        <div id="learn-indicator">Searching knowledge</div>
+        <div id="conversation-row">
+          <div id="chat-messages"></div>
+          <div id="workspace-panel">
+            <div id="workspace-header"><span>Workspace</span><button id="workspace-close" aria-label="Close workspace">✕</button></div>
+            <div id="workspace-content"></div>
+          </div>
+        </div>
+        <div id="input-bar">
+          <input id="chat-input" type="text" placeholder="Ask Vanta anything..." autocomplete="off">
+          <button class="icon-btn" id="mic-btn" title="Voice mode" aria-label="Switch to voice mode">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+          </button>
+          <button class="icon-btn" id="send-btn" title="Send" aria-label="Send message">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="voice-mode">
+      <div id="voice-hint-wrap">
+        <div id="voice-listening">
+          <div class="vbar"></div><div class="vbar"></div><div class="vbar"></div><div class="vbar"></div><div class="vbar"></div>
+        </div>
+        <button id="ptt-btn" aria-label="Hold to speak">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        </button>
+        <div id="ptt-label">hold to speak</div>
+        <div id="voice-hint-text">say "hey vanta" to speak</div>
+        <div id="demo-btns">
+          <button class="demo-btn" id="weather-demo-btn">"what's the weather"</button>
+          <button class="demo-btn" id="directions-demo-btn">"directions to the coffee shop"</button>
+        </div>
+      </div>
+
+      <div id="voice-shelf">
+        <div class="card-b" style="width:220px;">
+          <div class="card-b-eyebrow">WEATHER · LAGOS</div>
+          <div class="card-b-value">31°C</div>
+          <div class="card-b-footer"><span>CLOUDY</span><span>RAIN 9PM</span></div>
+        </div>
+      </div>
+
+      <div id="big-visual">
+        <div style="position:absolute; inset:0; background:linear-gradient(#0f1a14 1px,transparent 1px) 0 0/28px 28px, linear-gradient(90deg,#0f1a14 1px,transparent 1px) 0 0/28px 28px, #0a1410;"></div>
+        <div style="position:absolute; top:38%; left:44%; width:10px; height:10px; border-radius:50%; background:#00e5ff; box-shadow:0 0 14px 4px rgba(0,229,255,0.6);"></div>
+        <div style="position:absolute; top:60%; left:65%; width:8px; height:8px; border-radius:50%; background:#4a9a6a;"></div>
+        <div style="position:absolute; bottom:14px; left:14px; background:#03080f; border:1px solid #0f2030; border-radius:8px; padding:8px 12px;">
+          <div style="font-size:11px; color:#e8eef5;">8 min walk</div>
+          <div style="font-size:9px; color:#3a6a8a; margin-top:2px;">0.6 km via Adeola Odeku</div>
+        </div>
+        <button id="close-map-btn" aria-label="Close map">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="sphere-wrap" class="pos-presence">
+      <canvas id="sphere-canvas"></canvas>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+(function(){
+  function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  // ── Markdown rendering for Vanta's replies ─────────────────────────
+  // Escapes raw HTML first (so nothing the model outputs can inject real
+  // tags), THEN applies formatting on top of the escaped text — never the
+  // other way around.
+  function escapeHtml(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function scrollToBottom(){
+    // requestAnimationFrame waits for the browser to actually finish laying
+    // out whatever was just added before we measure scrollHeight — scrolling
+    // immediately after a DOM mutation can measure a stale, too-short height
+    // and land short of the real bottom, which is what was happening.
+    requestAnimationFrame(() => {
+      const messages = document.getElementById('chat-messages');
+      messages.scrollTop = messages.scrollHeight;
+    });
+  }
+
+  function renderMarkdown(raw){
+    let text = escapeHtml(raw);
+
+    // Fenced code blocks first, so backticks inside don't confuse inline code
+    text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+      `<pre class="md-code"><code>${code.trim()}</code></pre>`);
+
+    text = text.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+
+    // Consecutive "- " / "* " lines become a real list
+    text = text.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g, (m, block) => {
+      const items = block.trim().split('\n')
+        .map(line => `<li>${line.replace(/^[-*]\s+/, '')}</li>`).join('');
+      return `\n<ul class="md-list">${items}</ul>`;
+    });
+
+    // Remaining blank-line-separated chunks become paragraphs
+    return text.split(/\n\n+/).map(block => {
+      const t = block.trim();
+      if (!t) return '';
+      if (t.startsWith('<ul') || t.startsWith('<pre')) return t;
+      return `<p>${t.replace(/\n/g,'<br>')}</p>`;
+    }).join('');
+  }
+
+  const STATES = {
+    idle:     { rotY:0.0018, rotXAmp:0.10, rotXFreq:0.13, breatheAmp:0.12, breatheFreq:1.0,  wobble:0.012, scaleMin:1.0,  scaleMax:1.0,  innerBright:1.55, outerBright:1.2, labelColor:'#00e5ff', pulseMode:'breathe' },
+    thinking: { rotY:0.004,  rotXAmp:0.06, rotXFreq:0.35, breatheAmp:0.20, breatheFreq:1.8,  wobble:0.022, scaleMin:1.0,  scaleMax:1.0,  innerBright:1.1,  outerBright:0.7,  labelColor:'#4df0ff', pulseMode:'ripple'  },
+    speaking: { rotY:0.0022, rotXAmp:0.08, rotXFreq:0.18, breatheAmp:0.65, breatheFreq:3.5,  wobble:0.018, scaleMin:1.0,  scaleMax:1.0,  innerBright:1.4,  outerBright:1.2,  labelColor:'#b026ff', pulseMode:'speak'   },
+    learning: { rotY:0.0012, rotXAmp:0.14, rotXFreq:0.10, breatheAmp:0.08, breatheFreq:0.4,  wobble:0.010, scaleMin:0.68, scaleMax:1.32, innerBright:0.9,  outerBright:1.1,  labelColor:'#ff9500', pulseMode:'sweep'   },
+    sleeping: { rotY:0.0004, rotXAmp:0.03, rotXFreq:0.06, breatheAmp:0.05, breatheFreq:0.4,  wobble:0.004, scaleMin:1.0,  scaleMax:1.0,  innerBright:0.35, outerBright:0.2,  labelColor:'#2a2233', pulseMode:'breathe' },
+    error:    { rotY:0.0008, rotXAmp:0.05, rotXFreq:0.20, breatheAmp:0.06, breatheFreq:0.9,  wobble:0.008, scaleMin:1.0,  scaleMax:1.0,  innerBright:0.55, outerBright:0.4,  labelColor:'#ff2d4d', pulseMode:'deflate' },
+    alert:    { rotY:0.005,  rotXAmp:0.12, rotXFreq:0.40, breatheAmp:0.22, breatheFreq:2.2,  wobble:0.025, scaleMin:1.0,  scaleMax:1.0,  innerBright:1.3,  outerBright:1.15, labelColor:'#ff9500', pulseMode:'alert'   },
+  };
+
+  let current = {...STATES.idle}, target = {...STATES.idle}, stateName = 'idle';
+  let voiceAmp=0, voiceTarget=0, voiceTimer=0, alertRedAmount=0, learnScale=1.0;
+
+  function setState(name){
+    if(!STATES[name]) return;
+    target = {...STATES[name]}; stateName = name;
+  }
+  function lerpState(spd){
+    ['rotY','rotXAmp','rotXFreq','breatheAmp','breatheFreq','wobble','scaleMin','scaleMax','innerBright','outerBright'].forEach(k=>{ current[k]=lerp(current[k],target[k],spd); });
+    current.pulseMode = target.pulseMode;
+  }
+
+  function makeDotTex(){
+    const s=64,c=document.createElement('canvas'); c.width=c.height=s;
+    const x=c.getContext('2d'); const g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+    g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.4,'rgba(255,255,255,0.6)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=g; x.fillRect(0,0,s,s); return new THREE.CanvasTexture(c);
+  }
+  function buildShell(radius,count,jitter){
+    const pos=new Float32Array(count*3), ph=new Float32Array(count);
+    for(let i=0;i<count;i++){
+      const phi=Math.acos((Math.random()*2)-1), th=Math.random()*Math.PI*2;
+      const r=radius*(1-jitter+Math.random()*jitter*2);
+      pos[i*3]=r*Math.sin(phi)*Math.cos(th); pos[i*3+1]=r*Math.sin(phi)*Math.sin(th); pos[i*3+2]=r*Math.cos(phi);
+      ph[i]=Math.random()*Math.PI*2;
+    }
+    return {pos,ph,count};
+  }
+
+  const canvas = document.getElementById('sphere-canvas');
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75,1,0.1,1000);
+  camera.position.z = 8;
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+  const group = new THREE.Group(); scene.add(group);
+  group.scale.setScalar(0.001);
+
+  const dotTex = makeDotTex();
+  const iC=1100, iB=buildShell(2.1,iC,0.08);
+  const iGeo=new THREE.BufferGeometry();
+  iGeo.setAttribute('position',new THREE.Float32BufferAttribute(iB.pos.slice(),3));
+  iGeo.setAttribute('color',new THREE.BufferAttribute(new Float32Array(iC*3),3));
+  const iMesh=new THREE.Points(iGeo,new THREE.PointsMaterial({size:0.098,map:dotTex,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,vertexColors:true}));
+  group.add(iMesh);
+
+  const oC=1400, oB=buildShell(3.1,oC,0.22);
+  const oGeo=new THREE.BufferGeometry();
+  oGeo.setAttribute('position',new THREE.Float32BufferAttribute(oB.pos.slice(),3));
+  oGeo.setAttribute('color',new THREE.BufferAttribute(new Float32Array(oC*3),3));
+  const oMesh=new THREE.Points(oGeo,new THREE.PointsMaterial({size:0.062,map:dotTex,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,vertexColors:true}));
+  group.add(oMesh);
+
+  const dimC=new THREE.Color(0x124957), briC=new THREE.Color(0xc9fbff);
+  const dimH=new THREE.Color(0x0f3540), briH=new THREE.Color(0x78f6ff);
+  const redCol=new THREE.Color(0xff2d4d), tmp=new THREE.Color();
+
+  function getPulse(t,mode,freq,amp){
+    switch(mode){
+      case 'breathe': return Math.sin(t*freq)*amp;
+      case 'ripple':  return Math.sin(t*freq)*amp + Math.sin(t*freq*2.3)*amp*0.3;
+      case 'speak':   return voiceAmp*amp*2.2;
+      case 'sweep':   return (Math.sin(t*freq)*0.5+0.5)*amp;
+      case 'deflate': return Math.sin(t*freq)*amp*0.4;
+      case 'alert':   return Math.abs(Math.sin(t*freq))*amp;
+      default:        return Math.sin(t*freq)*amp;
+    }
+  }
+  function shadeShell(mesh,base,count,dc,bc,t,breathe,br,redMix){
+    const pa=mesh.geometry.attributes.position, ca=mesh.geometry.attributes.color;
+    const p=pa.array, c=ca.array;
+    for(let i=0;i<count;i++){
+      const x=i*3;
+      const w=1+Math.sin(t*current.wobble*50+base.ph[i])*current.wobble;
+      p[x]=base.pos[x]*w; p[x+1]=base.pos[x+1]*w; p[x+2]=base.pos[x+2]*w;
+      const len=Math.sqrt(p[x]*p[x]+p[x+1]*p[x+1]+p[x+2]*p[x+2])||1;
+      const depth=0.3+0.7*((p[x+2]/len+1)/2);
+      const twinkle=Math.pow(Math.max(0,Math.sin(t*1.1+base.ph[i]*3)),4)*0.4;
+      const bright=Math.min(1,depth*br*(1+breathe)+twinkle);
+      tmp.copy(dc).lerp(bc,bright);
+      if(redMix>0) tmp.lerp(redCol,redMix*depth);
+      c[x]=tmp.r; c[x+1]=tmp.g; c[x+2]=tmp.b;
+    }
+    pa.needsUpdate=true; ca.needsUpdate=true;
+  }
+
+  function growSphere(dur){
+    return new Promise(resolve=>{
+      const s=performance.now();
+      function tick(now){
+        const t=Math.min(1,(now-s)/dur);
+        const e=t<0.6?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+        group.scale.setScalar(0.001+e*0.999*learnScale);
+        if(t<1) requestAnimationFrame(tick); else resolve();
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  let lastW=0,lastH=0, startTime=performance.now(), lastNow=startTime, grown=false;
+  const errorEdge = document.getElementById('error-edge');
+
+  function renderLoop(now){
+    requestAnimationFrame(renderLoop);
+    const w=canvas.clientWidth, h=canvas.clientHeight;
+    if(w>0 && h>0 && (w!==lastW || h!==lastH)){
+      lastW=w; lastH=h;
+      renderer.setSize(w,h,false);
+      camera.aspect=w/h; camera.updateProjectionMatrix();
+    }
+    const t=(now-startTime)*0.001;
+    const dt=Math.min((now-lastNow)*0.001,0.05); lastNow=now;
+    lerpState(0.04);
+
+    if(stateName==='speaking'){
+      voiceTimer-=dt;
+      if(voiceTimer<=0){ voiceTarget=0.4+Math.random()*0.6; voiceTimer=0.05+Math.random()*0.12; }
+      voiceAmp=lerp(voiceAmp,voiceTarget,0.4);
+    } else { voiceAmp=lerp(voiceAmp,0,0.1); }
+
+    if(stateName==='error') alertRedAmount=lerp(alertRedAmount,0.65,0.06);
+    else alertRedAmount=lerp(alertRedAmount,0,0.07);
+
+    if(stateName==='alert'){ errorEdge.style.opacity=(0.12+Math.abs(Math.sin(t*1.8))*0.16).toFixed(3); }
+    else { errorEdge.style.opacity='0'; }
+
+    if(stateName==='learning'){
+      const lp=(Math.sin(t*current.breatheFreq*Math.PI)*0.5+0.5);
+      learnScale=lerp(current.scaleMin,current.scaleMax,lp);
+    } else { learnScale=lerp(learnScale,1.0,0.05); }
+
+    if(grown) group.scale.setScalar(learnScale);
+
+    group.rotation.y += current.rotY;
+    group.rotation.x = Math.sin(t*current.rotXFreq)*current.rotXAmp;
+
+    const pulse = getPulse(t,current.pulseMode,current.breatheFreq,current.breatheAmp);
+    shadeShell(iMesh,iB,iC,dimC,briC,t,pulse,current.innerBright,alertRedAmount);
+    shadeShell(oMesh,oB,oC,dimH,briH,t*0.8,pulse*0.8,current.outerBright,alertRedAmount*0.7);
+    renderer.render(scene,camera);
+  }
+  requestAnimationFrame(renderLoop);
+
+  function getGreeting(){
+    const h = new Date().getHours();
+    const choices = h < 5 || h >= 22 ? ['Still up.', 'Working late?', 'The quiet hours are good for building.', 'Late-night ideas can be interesting.']
+      : h < 12 ? ['Good morning.', 'Morning. What are we working on?', 'A new day. Where do we begin?', "Good morning. Let's build something."]
+      : h < 17 ? ['Good afternoon.', 'What are we building today?', 'Ready when you are.', "What's the plan?"]
+      : ['Good evening.', 'What are we working on tonight?', 'Still thinking?', "Let's get into it."];
+    return choices[Math.floor(Math.random() * choices.length)];
+  }
+  document.getElementById('presence-greeting').textContent = getGreeting();
+
+  let barAnim=null;
+  function animateBarTo(to,dur){
+    if(barAnim) cancelAnimationFrame(barAnim);
+    const fill=document.getElementById('boot-fill'), pctEl=document.getElementById('boot-pct');
+    const from=parseFloat(fill.style.width)||0;
+    return new Promise(resolve=>{
+      const s=performance.now();
+      function tick(now){
+        const t=Math.min(1,(now-s)/dur);
+        const e=1-Math.pow(1-t,3);
+        const v=from+(to-from)*e;
+        fill.style.width=v+'%'; pctEl.textContent=Math.round(v)+'%';
+        if(t<1){ barAnim=requestAnimationFrame(tick); } else { barAnim=null; resolve(); }
+      }
+      barAnim=requestAnimationFrame(tick);
+    });
+  }
+
+  async function boot(){
+    const header=document.getElementById('boot-header');
+    const mods=Array.from(document.querySelectorAll('.bmod'));
+    const barWrap=document.getElementById('boot-bar-wrap');
+    const statusEl=document.getElementById('boot-status');
+
+    await wait(300);
+    header.style.opacity='1';
+    await wait(400);
+    barWrap.style.opacity='1'; barWrap.style.transform='translateY(0)';
+    const barPromise = animateBarTo(100,1800);
+    mods.forEach((mod, i) => {
+      setTimeout(() => {
+        mod.style.opacity='1'; mod.style.transform='translateY(0)';
+        const st=mod.querySelector('.bmod-status');
+        const ready = mod.dataset.ready === 'true';
+        const customStatus = mod.dataset.status;
+        st.textContent = customStatus || (ready ? 'ready' : 'unavailable');
+        st.style.color = ready ? '#666' : (customStatus === 'standby' ? '#4b6a78' : '#ff9500');
+      }, i * 180);
+    });
+    statusEl.textContent='initializing';
+    await barPromise;
+    statusEl.textContent='ready';
+    await wait(400);
+
+    const bootEl=document.getElementById('boot');
+    bootEl.style.opacity='0';
+    await wait(700);
+    bootEl.style.display='none';
+
+    document.getElementById('app').style.opacity='1';
+    await wait(150);
+    grown=true;
+    await growSphere(1100);
+  }
+  boot();
+
+  let mode='presence';
+  const sphereWrap=document.getElementById('sphere-wrap');
+  const presenceMode=document.getElementById('presence-mode');
+  const textMode=document.getElementById('text-mode');
+  const voiceMode=document.getElementById('voice-mode');
+  const bigVisual=document.getElementById('big-visual');
+  const voiceShelf=document.getElementById('voice-shelf');
+  const voiceToggle=document.getElementById('voice-toggle');
+
+  function positionSphereFor(slot, completed){
+    if (!slot) return;
+
+    // The sphere stays in #main (one WebGL canvas, one render loop).  We only
+    // translate its absolute coordinates into #main's coordinate space.
+    const mainRect = document.getElementById('main').getBoundingClientRect();
+    const slotRect = slot.getBoundingClientRect();
+    const size = completed ? 48 : 54;
+
+    sphereWrap.className = 'pos-response';
+    sphereWrap.style.width = `${size}px`;
+    sphereWrap.style.height = `${size}px`;
+
+    let left, top;
+    if (completed) {
+      // Reserve space under the live reply, then settle the sphere at the
+      // bottom-left of that reply instead of below the entire page.
+      left = slotRect.left - mainRect.left + 4;
+      top = slotRect.bottom - mainRect.top - size + 4;
+    } else {
+      // While streaming, keep it associated with the live reply.
+      left = slotRect.left - mainRect.left + 4;
+      top = slotRect.top - mainRect.top + 4;
+    }
+
+    sphereWrap.style.left = `${Math.max(8, left)}px`;
+    sphereWrap.style.top = `${Math.max(8, top)}px`;
+  }
+
+  function repositionActiveSphere(){
+    const slot = document.getElementById('last-vanta');
+    if (slot && sphereWrap.classList.contains('pos-response')) positionSphereFor(slot, false);
+  }
+
+  function enterConversation(){
+    // Presence → Conversation: the sphere shrinks into a persistent corner
+    // presence instead of disappearing, chat becomes the focus.
+    if (mode === 'presence') presenceMode.classList.add('hidden');
+    mode='text';
+    sphereWrap.className='pos-conversation';
+    bigVisual.style.opacity='0'; bigVisual.style.pointerEvents='none';
+    voiceShelf.classList.remove('open');
+    voiceMode.style.opacity='0';
+    setTimeout(()=>{ voiceMode.style.display='none'; },400);
+    textMode.style.display='flex';
+    setTimeout(()=>{ textMode.style.opacity='1'; },20);
+    voiceToggle.textContent='voice mode';
+  }
+  function goText(){ enterConversation(); }
+  function goVoice(){
+    presenceMode.classList.add('hidden');
+    mode='voice';
+    textMode.style.opacity='0';
+    setTimeout(()=>{ textMode.style.display='none'; },400);
+    voiceMode.style.display='block';
+    setTimeout(()=>{ voiceMode.style.opacity='1'; },20);
+    sphereWrap.style.display='flex';
+    sphereWrap.className='pos-voice';
+    bigVisual.style.opacity='0'; bigVisual.style.pointerEvents='none';
+    voiceShelf.classList.remove('open');
+    voiceToggle.textContent='text mode';
+  }
+  voiceToggle.addEventListener('click', ()=>{ mode==='voice' ? goText() : goVoice(); });
+  document.getElementById('mic-btn').addEventListener('click', goVoice);
+
+  document.getElementById('weather-demo-btn').addEventListener('click', ()=>{
+    setState('speaking');
+    voiceShelf.classList.add('open');
+    setTimeout(()=>{ setState('idle'); },2800);
+  });
+  document.getElementById('directions-demo-btn').addEventListener('click', ()=>{
+    setState('speaking');
+    voiceShelf.classList.remove('open');
+    sphereWrap.className='pos-pill';
+    setTimeout(()=>{ bigVisual.style.opacity='1'; bigVisual.style.pointerEvents='all'; },250);
+    setTimeout(()=>{ setState('idle'); },3200);
+  });
+  document.getElementById('close-map-btn').addEventListener('click', ()=>{
+    bigVisual.style.opacity='0'; bigVisual.style.pointerEvents='none';
+    sphereWrap.className='pos-voice';
+    setState('idle');
+  });
+
+  // ── Backend connection ─────────────────────────────────────────────
+  const socket = io();
+  window.socket = socket; // exposed for manual testing via DevTools console
+  let streamBuffer = '';
+  let currentMsgMode = 'CHAT';
+  const learnIndicator = document.getElementById('learn-indicator');
+  const workspacePanel = document.getElementById('workspace-panel');
+  const workspaceContent = document.getElementById('workspace-content');
+
+  function openWorkspace(){
+    workspacePanel.classList.add('open');
+    workspaceContent.textContent = '';
+  }
+  document.getElementById('workspace-close').addEventListener('click', () => {
+    workspacePanel.classList.remove('open');
+  });
+
+  socket.on('status', ({state, mode: msgMode}) => {
+    if (state && STATES[state]) setState(state);
+    learnIndicator.classList.toggle('active', state === 'learning');
+    if (msgMode) {
+      currentMsgMode = msgMode;
+      if (msgMode === 'CODE') {
+        openWorkspace();
+        document.getElementById('last-vanta-text').innerHTML =
+          renderMarkdown('_Building this — see the workspace panel →_');
+      }
+    }
+  });
+
+  socket.on('stream_chunk', ({chunk}) => {
+    streamBuffer += chunk;
+    if (currentMsgMode === 'CODE') {
+      workspaceContent.textContent = streamBuffer;
+      workspaceContent.scrollTop = workspaceContent.scrollHeight;
+    } else {
+      document.getElementById('last-vanta-text').innerHTML = renderMarkdown(streamBuffer);
+    }
+    repositionActiveSphere();
+    scrollToBottom();
+  });
+
+  socket.on('stream_done', () => {
+    const textEl = document.getElementById('last-vanta-text');
+    if (textEl && !streamBuffer.trim()) {
+      // Nothing ever arrived via stream_chunk — surface that clearly instead
+      // of leaving a silent blank bubble, so this is debuggable, not confusing.
+      textEl.textContent = '⚠ No response text received — check the server terminal for what happened.';
+    } else if (textEl && currentMsgMode === 'CODE') {
+      textEl.innerHTML = renderMarkdown('_Done — see the workspace panel for the code._');
+    }
+    streamBuffer = '';
+    currentMsgMode = 'CHAT';
+    learnIndicator.classList.remove('active');
+    setState('idle');
+    const slot = document.getElementById('last-vanta');
+    requestAnimationFrame(() => positionSphereFor(slot, true));
+  });
+
+  socket.on('response', ({text}) => {
+    // Complete, non-streamed messages — wake-word replies, checklist
+    // offers, visual-critique reports. Same live-reply slot as streaming.
+    document.getElementById('last-vanta-text').innerHTML = renderMarkdown(text);
+    setState('idle');
+    const slot = document.getElementById('last-vanta');
+    requestAnimationFrame(() => positionSphereFor(slot, true));
+  });
+
+  socket.on('error', ({message}) => {
+    setState('error');
+    learnIndicator.classList.remove('active');
+    document.getElementById('last-vanta-text').textContent = `⚠ ${message}`;
+    const slot = document.getElementById('last-vanta');
+    requestAnimationFrame(() => positionSphereFor(slot, true));
+  });
+
+  socket.on('alert', ({title, message}) => {
+    // Proactive, unprompted notice from the watcher daemon — not a reply
+    // to anything the user asked, so it gets its own bubble rather than
+    // overwriting the live reply slot. Reactor flashes 'alert' briefly
+    // (already-built red-tinted pulse), then returns to idle.
+    const priorState = stateName;
+    setState('alert');
+    setTimeout(() => { if (stateName === 'alert') setState(priorState === 'alert' ? 'idle' : priorState); }, 3000);
+
+    const messages = document.getElementById('chat-messages');
+    const alertMsg = document.createElement('div');
+    alertMsg.className = 'msg';
+    alertMsg.innerHTML = '<div class="msg-bubble"><p class="msg-text"></p></div>';
+    alertMsg.querySelector('p').textContent = `⚠ ${title}: ${message}`;
+    messages.insertBefore(alertMsg, document.getElementById('last-vanta'));
+    scrollToBottom();
+  });
+
+  function promoteLastVanta(){
+    // Turn the current live reply into a permanent bubble before starting a
+    // new one, so past replies stick around instead of vanishing.
+    const old = document.getElementById('last-vanta');
+    if(!old) return;
+    old.removeAttribute('id');
+    const oldText = old.querySelector('#last-vanta-text');
+    if(oldText) oldText.removeAttribute('id'); // otherwise this stale node
+                                                // keeps the id and steals every
+                                                // future stream_chunk update
+  }
+
+  function sendMessage(){
+    const input=document.getElementById('chat-input');
+    const text=input.value.trim();
+    if(!text) return;
+    input.value='';
+
+    const messages=document.getElementById('chat-messages');
+    promoteLastVanta();
+
+    const userMsg=document.createElement('div');
+    userMsg.className='msg user';
+    userMsg.innerHTML='<div class="msg-bubble"><p class="msg-text"></p></div>';
+    userMsg.querySelector('p').textContent=text;
+    messages.appendChild(userMsg);
+
+    const replySlot=document.createElement('div');
+    replySlot.className='msg assistant';
+    replySlot.id='last-vanta';
+    replySlot.innerHTML='<div class="msg-bubble"><p class="msg-text" id="last-vanta-text"></p></div>';
+    messages.appendChild(replySlot);
+    scrollToBottom();
+
+    setState('thinking');
+    streamBuffer = '';
+    positionSphereFor(replySlot, false);
+
+    socket.emit('chat', { message: text, think: false });
+  }
+  document.getElementById('send-btn').addEventListener('click', sendMessage);
+  document.getElementById('chat-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+  document.getElementById('chat-messages').addEventListener('scroll', repositionActiveSphere);
+  window.addEventListener('resize', repositionActiveSphere);
+
+  function sendFromPresence(){
+    const presenceInput = document.getElementById('presence-input');
+    const text = presenceInput.value.trim();
+    if(!text) return;
+    presenceInput.value='';
+    enterConversation();
+    document.getElementById('chat-input').value = text;
+    sendMessage();
+  }
+  document.getElementById('presence-send-btn').addEventListener('click', sendFromPresence);
+  document.getElementById('presence-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendFromPresence(); });
+
+  // ── Push-to-talk ──────────────────────────────────────────────────
+  const pttBtn = document.getElementById('ptt-btn');
+  const pttLabel = document.getElementById('ptt-label');
+  let mediaRecorder = null, audioChunks = [], micStream = null;
+
+  async function startRecording(){
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      pttLabel.textContent = 'mic permission denied';
+      return;
+    }
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(micStream);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.start();
+    pttBtn.classList.add('recording');
+    pttLabel.textContent = 'recording…';
+    setState('speaking');
+  }
+
+  async function stopRecording(){
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+    mediaRecorder.stop();
+    micStream.getTracks().forEach(t => t.stop());
+    pttBtn.classList.remove('recording');
+    pttLabel.textContent = 'transcribing…';
+    setState('thinking');
+    await new Promise(res => mediaRecorder.addEventListener('stop', res, { once: true }));
+
+    const blob = new Blob(audioChunks, { type: 'audio/webm' });
+    const formData = new FormData();
+    formData.append('audio', blob, 'recording.webm');
+
+    try {
+      const res = await fetch('/transcribe', { method: 'POST', body: formData });
+      const data = await res.json();
+      const text = data.text?.trim();
+      pttLabel.textContent = 'hold to speak';
+      if (text) {
+        goText();
+        document.getElementById('chat-input').value = text;
+        sendMessage();
+      } else {
+        setState('idle');
+      }
+    } catch {
+      pttLabel.textContent = 'transcription failed';
+      setState('error');
+      setTimeout(() => { pttLabel.textContent = 'hold to speak'; setState('idle'); }, 2000);
+    }
+  }
+
+  pttBtn.addEventListener('pointerdown', startRecording);
+  pttBtn.addEventListener('pointerup', stopRecording);
+  pttBtn.addEventListener('pointerleave', stopRecording);
+})();
+</script>
+</body>
+</html>
