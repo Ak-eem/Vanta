@@ -844,6 +844,8 @@ def run_cmd(cmd: str, sid: str, retries: int = 4, target_filenames: list[str] | 
                 if parsed["saved"]:
                     safe = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
                     parsed["filenames"] = safe
+                    if safe:
+                        target_filenames = safe
                 elif target_filenames and fix.strip():
                     primary = target_filenames[0]
                     write_and_open([primary], {primary: _plain_repair_code(fix)}, WORKSPACE)

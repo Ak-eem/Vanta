@@ -22,6 +22,7 @@ _CACHE_LOCK = threading.RLock()
 _CACHED_CHUNKS = None
 _CACHED_SIGNATURE = None
 _CACHE_UNAVAILABLE = False
+_SCAN_UNAVAILABLE = False
 
 
 def chunk_markdown(text: str, chunk_size: int = 600) -> list:
@@ -48,6 +49,8 @@ def chunk_markdown(text: str, chunk_size: int = 600) -> list:
 
 def _knowledge_files() -> list:
     """Return safe, bounded markdown files beneath KNOWLEDGE_DIR."""
+    global _SCAN_UNAVAILABLE
+    _SCAN_UNAVAILABLE = False
     knowledge_root = KNOWLEDGE_DIR.resolve()
     files = []
     scanned = 0
@@ -101,6 +104,7 @@ def _knowledge_files() -> list:
             exc,
             exc_info=True,
         )
+        _SCAN_UNAVAILABLE = True
 
     return files
 
@@ -108,6 +112,10 @@ def _knowledge_files() -> list:
 def load_knowledge_base() -> list:
     global _CACHED_CHUNKS, _CACHED_SIGNATURE, _CACHE_UNAVAILABLE
     files = _knowledge_files()
+    if _SCAN_UNAVAILABLE:
+        with _CACHE_LOCK:
+            _CACHE_UNAVAILABLE = True
+        return []
     signature = []
     try:
         signature = [(str(filepath), filepath.stat().st_mtime_ns, filepath.stat().st_size)
@@ -125,6 +133,7 @@ def load_knowledge_base() -> list:
             return _CACHED_CHUNKS
 
     chunks = []
+    read_failed = False
     knowledge_root = KNOWLEDGE_DIR.resolve()
     for filepath in files:
         try:
@@ -136,6 +145,7 @@ def load_knowledge_base() -> list:
                     "category": filepath.parent.name,
                 })
         except (OSError, UnicodeDecodeError) as exc:
+            read_failed = True
             logger.warning(
                 "Unable to read knowledge file %s: %s",
                 filepath,
@@ -145,7 +155,7 @@ def load_knowledge_base() -> list:
     with _CACHE_LOCK:
         _CACHED_CHUNKS = chunks
         _CACHED_SIGNATURE = signature
-        _CACHE_UNAVAILABLE = False
+        _CACHE_UNAVAILABLE = read_failed
         return _CACHED_CHUNKS
 
 
