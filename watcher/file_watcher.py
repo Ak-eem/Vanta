@@ -5,6 +5,7 @@ failures. Silent on success by design — it only speaks up when
 something actually needs attention.
 """
 
+import shlex
 import subprocess
 import time
 import threading
@@ -14,6 +15,7 @@ from watchdog.events import FileSystemEventHandler
 
 UNCOMMITTED_THRESHOLD_HOURS = 4
 GIT_CHECK_INTERVAL_SECONDS = 300  # 5 minutes
+ALLOWED_TEST_EXECUTABLES = {"python", "python3", "pytest", "node", "npm"}
 
 
 class _DebouncedHandler(FileSystemEventHandler):
@@ -61,7 +63,7 @@ class FileWatcher:
             self._observer.stop()
             self._observer.join()
 
-    # ── Git monitoring ───────────────────────────────────────────────
+    # ── Git monitoring ──────────────────────────────────────────────────────
     def _git_loop(self):
         while not self._stop.is_set():
             for proj in self.projects:
@@ -102,7 +104,7 @@ class FileWatcher:
                 source=repo_path,
             )
 
-    # ── Optional test/build monitoring (opt-in per project) ─────────
+    # ── Optional test/build monitoring (opt-in per project) ────────────────
     def _test_loop(self):
         last_run: dict[str, float] = {}
         while not self._stop.is_set():
@@ -118,17 +120,55 @@ class FileWatcher:
             self._stop.wait(60)
 
     def _run_test(self, proj: dict):
+        project_path = proj["path"]
+        command = proj.get("test_command")
+        try:
+            argv = shlex.split(command or "")
+        except (TypeError, ValueError) as exc:
+            self.on_alert(
+                "high",
+                "Invalid test command",
+                f"{Path(project_path).name}: malformed command ({exc})",
+                source=project_path,
+            )
+            return
+
+        if not argv:
+            self.on_alert(
+                "high",
+                "Invalid test command",
+                f"{Path(project_path).name}: test command is empty",
+                source=project_path,
+            )
+            return
+
+        executable = Path(argv[0]).name
+        if executable not in ALLOWED_TEST_EXECUTABLES:
+            allowed = ", ".join(sorted(ALLOWED_TEST_EXECUTABLES))
+            self.on_alert(
+                "high",
+                "Invalid test command",
+                f"{Path(project_path).name}: executable '{executable}' is not allowed; "
+                f"allowed executables: {allowed}",
+                source=project_path,
+            )
+            return
+
         try:
             result = subprocess.run(
-                proj["test_command"], shell=True, cwd=proj["path"],
-                capture_output=True, text=True, timeout=120,
+                argv,
+                shell=False,
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             if result.returncode != 0:
                 err = (result.stderr or result.stdout)[:200]
                 self.on_alert("high", "Tests failing",
-                               f"{Path(proj['path']).name}: {err}", source=proj["path"])
+                              f"{Path(project_path).name}: {err}", source=project_path)
         except subprocess.TimeoutExpired:
             self.on_alert("medium", "Test run timed out",
-                           Path(proj["path"]).name, source=proj["path"])
+                          Path(project_path).name, source=project_path)
         except Exception:
             pass
