@@ -1,5 +1,4 @@
-"""
-Vanta RAG Module — Keyword Matching (no downloads, works offline)
+"""Vanta RAG Module — Keyword Matching (no downloads, works offline)
 Drop-in replacement for the chromadb version: same import path
 (vanta_knowledge.rag), same query_rag(msg, top_k) signature expected
 by server.py, so nothing else needs to change.
@@ -9,14 +8,19 @@ embedder downloads a 79MB ONNX model on first run, which kept timing out
 on a slow connection. This has zero downloads and works immediately.
 """
 
+import logging
 import re
 from pathlib import Path
 
+
 KNOWLEDGE_DIR = Path(__file__).parent
+MAX_KNOWLEDGE_FILES = 500
+MAX_KNOWLEDGE_FILE_SIZE = 2 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 def chunk_markdown(text: str, chunk_size: int = 600) -> list:
-    sections = re.split(r'\n(?=#{1,3} )', text)
+    sections = re.split(r'\n(?=\#{1,3} )', text)
     chunks = []
     for section in sections:
         if len(section.strip()) < 50:
@@ -37,19 +41,84 @@ def chunk_markdown(text: str, chunk_size: int = 600) -> list:
     return chunks
 
 
+def _knowledge_files() -> list:
+    """Return safe, bounded markdown files beneath KNOWLEDGE_DIR."""
+    knowledge_root = KNOWLEDGE_DIR.resolve()
+    files = []
+    scanned = 0
+
+    try:
+        for filepath in KNOWLEDGE_DIR.rglob("*.md"):
+            if scanned >= MAX_KNOWLEDGE_FILES:
+                logger.warning(
+                    "Knowledge scan capped at %d files under %s",
+                    MAX_KNOWLEDGE_FILES,
+                    knowledge_root,
+                )
+                break
+            scanned += 1
+
+            if filepath.is_symlink():
+                logger.warning("Skipping symlink in knowledge directory: %s", filepath)
+                continue
+
+            try:
+                resolved_path = filepath.resolve(strict=True)
+                resolved_path.relative_to(knowledge_root)
+                if not resolved_path.is_file():
+                    continue
+                if resolved_path.stat().st_size > MAX_KNOWLEDGE_FILE_SIZE:
+                    logger.warning(
+                        "Skipping oversized knowledge file (%d byte limit): %s",
+                        MAX_KNOWLEDGE_FILE_SIZE,
+                        resolved_path,
+                    )
+                    continue
+            except ValueError:
+                logger.warning(
+                    "Skipping knowledge file outside KNOWLEDGE_DIR: %s", filepath
+                )
+                continue
+            except (OSError, RuntimeError) as exc:
+                logger.warning(
+                    "Unable to validate knowledge file %s: %s",
+                    filepath,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            files.append(resolved_path)
+    except OSError as exc:
+        logger.warning(
+            "Unable to complete knowledge directory scan under %s: %s",
+            knowledge_root,
+            exc,
+            exc_info=True,
+        )
+
+    return files
+
+
 def load_knowledge_base() -> list:
     chunks = []
-    for filepath in KNOWLEDGE_DIR.rglob("*.md"):
+    knowledge_root = KNOWLEDGE_DIR.resolve()
+    for filepath in _knowledge_files():
         try:
             text = filepath.read_text(encoding='utf-8')
             for chunk in chunk_markdown(text):
                 chunks.append({
                     "text": chunk,
-                    "source": filepath.name,
+                    "source": filepath.relative_to(knowledge_root).as_posix(),
                     "category": filepath.parent.name,
                 })
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "Unable to read knowledge file %s: %s",
+                filepath,
+                exc,
+                exc_info=True,
+            )
     return chunks
 
 
@@ -60,39 +129,44 @@ def score_chunk(chunk: str, query_words: list) -> float:
 
 def _category_for_query(query_lower: str) -> str | None:
     if any(w in query_lower for w in ('deploy', 'deployment', 'hosting', 'host',
-            'vercel', 'supabase', 'domain', 'dns', 'ssl', 'go live', 'production',
-            'launch', 'env variable', 'environment variable')):
+                                      'vercel', 'supabase', 'domain', 'dns', 'ssl', 'go live', 'production',
+                                      'launch', 'env variable', 'environment variable')):
         return 'deployment'
     if any(w in query_lower for w in ('cart', 'checkout', 'product grid',
-            'product card', 'e-commerce', 'ecommerce', 'online store',
-            'variant', 'size selector', 'add to cart', 'wishlist')):
+                                      'product card', 'e-commerce', 'ecommerce', 'online store',
+                                      'variant', 'size selector', 'add to cart', 'wishlist')):
         return 'ecommerce'
     if any(w in query_lower for w in ('website', 'ui', 'frontend', 'html', 'css',
-            'design', 'landing', 'portfolio', 'animation', 'layout', 'navbar',
-            'hero', 'card', 'dark', 'cinematic', 'glassmorphism', 'cursor',
-            'accessibility', 'a11y', 'alt text', 'screen reader', 'contrast',
-            'keyboard nav', 'aria', 'focus state',
-            'restaurant', 'menu', 'reservation', 'school', 'enrollment',
-            'tuition', 'repair shop', 'salon', 'clinic', 'booking',
-            'appointment', 'local business', 'small business', 'gym',
-            'fitness', 'law firm', 'lawyer', 'attorney', 'dentist',
-            'doctor', 'medical practice', 'photographer', 'photography',
-            'real estate', 'contractor', 'plumber', 'electrician',
-            'event planner', 'bakery', 'cafe', 'hotel', 'spa',
-            'non-profit', 'church', 'service business')):
+                                      'design', 'landing', 'portfolio', 'animation', 'layout', 'navbar',
+                                      'hero', 'card', 'dark', 'cinematic', 'glassmorphism', 'cursor',
+                                      'accessibility', 'a11y', 'alt text', 'screen reader', 'contrast',
+                                      'keyboard nav', 'aria', 'focus state',
+                                      'restaurant', 'menu', 'reservation', 'school', 'enrollment',
+                                      'tuition', 'repair shop', 'salon', 'clinic', 'booking',
+                                      'appointment', 'local business', 'small business', 'gym',
+                                      'fitness', 'law firm', 'lawyer', 'attorney', 'dentist',
+                                      'doctor', 'medical practice', 'photographer', 'photography',
+                                      'real estate', 'contractor', 'plumber', 'electrician',
+                                      'event planner', 'bakery', 'cafe', 'hotel', 'spa',
+                                      'non-profit', 'church', 'service business')):
         return 'webdev'
     if any(w in query_lower for w in ('security', 'vulnerability', 'xss', 'injection',
-            'auth', 'login', 'password', 'token', 'sanitize', 'secure', 'encrypt',
-            'cors', 'csrf')):
+                                      'auth', 'login', 'password', 'token', 'sanitize', 'secure', 'encrypt',
+                                      'cors', 'csrf')):
         return 'security'
     if any(w in query_lower for w in ('database', 'db', 'sql', 'postgres', 'sqlite',
-            'firebase', 'schema', 'query', 'migration', 'table', 'index', 'orm')):
+                                      'firebase', 'schema', 'query', 'migration', 'table', 'index', 'orm')):
         return 'databases'
     return None
 
 
 def query_rag(query: str, top_k: int = 3) -> str:
     """Main entry point — matches the signature server.py already imports."""
+    if type(top_k) is not int:
+        raise TypeError("top_k must be a non-negative int")
+    if top_k < 0:
+        raise ValueError("top_k must be a non-negative int")
+
     all_chunks = load_knowledge_base()
     if not all_chunks:
         return ""
@@ -130,9 +204,9 @@ def index_knowledge_base(force_reindex: bool = False):
     """No-op for keyword matching — nothing to pre-index. Kept so any code
     that calls this on startup (both server.py and agent_v10_1.py do) doesn't break."""
     chunks = load_knowledge_base()
-    n_files = len(list(KNOWLEDGE_DIR.rglob('*.md')))
+    n_files = len({chunk["source"] for chunk in chunks})
     if chunks:
-        print(f"📚 Knowledge base loaded: {len(chunks)} chunks from {n_files} files.")
+        print(f"🧠 Knowledge base loaded: {len(chunks)} chunks from {n_files} files.")
     else:
         print("⚠️  No knowledge base files found.")
 
