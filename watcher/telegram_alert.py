@@ -21,6 +21,18 @@ SEVERITY_PREFIX = {
     "high": "⚠️",
 }
 
+# Legacy Telegram "Markdown" (not MarkdownV2) only requires escaping these —
+# left unescaped, an underscore or backtick anywhere in a news headline or
+# git message makes Telegram reject the whole request with a 400 "can't
+# parse entities" error, so the alert silently never arrives.
+_MD_SPECIAL = ("_", "*", "`", "[")
+
+
+def _escape_markdown(text: str) -> str:
+    for ch in _MD_SPECIAL:
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
 
 def send_telegram_alert(bot_token: str, chat_id: str, title: str, message: str,
                          severity: str = "medium", source: str = ""):
@@ -28,9 +40,9 @@ def send_telegram_alert(bot_token: str, chat_id: str, title: str, message: str,
         return
 
     prefix = SEVERITY_PREFIX.get(severity, "🔵")
-    text = f"{prefix} *{title}*\n{message}"
+    text = f"{prefix} *{_escape_markdown(title)}*\n{_escape_markdown(message)}"
     if source:
-        text += f"\n\n_{source}_"
+        text += f"\n\n_{_escape_markdown(source)}_"
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = json.dumps({

@@ -20,7 +20,8 @@ import os
 import time
 from pathlib import Path
 
-from orchestrator.openrouter_router import OpenRouterClient
+from orchestrator.model_router import VISION_MODEL_PRIORITIES
+from orchestrator.openrouter_router import OpenRouterClient, OpenRouterError
 
 
 VISION_MODEL = "qwen/qwen3.6-27b"
@@ -93,30 +94,32 @@ def _critique_screenshots(groq_client, shot1: bytes, shot2: bytes) -> str:
 def _critique_screenshots_openrouter(
     openrouter_client: OpenRouterClient, shot1: bytes, shot2: bytes
 ) -> str:
-    """FIXED: Use complete() directly instead of execute() which does not
-    support vision content or the extra kwargs that were being passed."""
     b64_1 = base64.b64encode(shot1).decode()
     b64_2 = base64.b64encode(shot2).decode()
-    content = [
-        {"type": "text", "text": "Screenshot 1 — page load:"},
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_1}"}},
-        {"type": "text", "text": "Screenshot 2 — ~500ms later:"},
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_2}"}},
+    messages = [
+        {"role": "system", "content": VISUAL_CRITIQUE_SYSTEM},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Screenshot 1 — page load:"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_1}"}},
+            {"type": "text", "text": "Screenshot 2 — ~500ms later:"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_2}"}},
+        ]},
     ]
-    model = os.getenv("VISION_CRITIQUE_MODEL", "").strip() or VISION_MODEL
-    try:
-        resp = openrouter_client.complete(
-            model=model,
-            messages=[
-                {"role": "system", "content": VISUAL_CRITIQUE_SYSTEM},
-                {"role": "user", "content": content},
-            ],
-            max_tokens=600,
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"[Visual critique via OpenRouter failed: {e}]"
+
+    override = os.getenv("VISION_CRITIQUE_MODEL", "").strip()
+    candidates = [override] if override else VISION_MODEL_PRIORITIES.get("ui_critique", [])
+    if not candidates:
+        raise OpenRouterError("No vision-capable OpenRouter model configured")
+
+    last_error: Exception = OpenRouterError("No vision-capable OpenRouter model available")
+    for model in candidates:
+        try:
+            resp = openrouter_client.complete(model=model, messages=messages, max_tokens=600, temperature=0.2)
+            return resp.choices[0].message.content
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise last_error
 
 
 def run_visual_critique(groq_client, file_path: str):

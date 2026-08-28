@@ -5,7 +5,7 @@ No API key needed — uses the real Google interface.
 Results are cached in SQLite to avoid hammering Google.
 """
 
-import asyncio, hashlib, json, sqlite3, time
+import asyncio, hashlib, sqlite3, time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus

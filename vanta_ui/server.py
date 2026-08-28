@@ -16,7 +16,6 @@ from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils.commands import parse_run_command
 
 try:
     from .checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
@@ -37,28 +36,28 @@ except Exception as e:
 
 # ── Optional modules ───────────────────────────────────────────────────────────
 try:
-    from vanta_knowledge.rag import query_rag, knowledge_status
+    from vanta_knowledge.rag import query_rag
     RAG_OK = True
 except ImportError:
     RAG_OK = False
 
 try:
-    from vanta_knowledge.google_search import google_search_context, should_search_google
+    from vanta_knowledge.google_search import google_search_context
     GOOGLE_OK = True
 except ImportError:
     GOOGLE_OK = False
-
-try:
-    from vanta_knowledge.memory import process_turn, get_profile
-    MEMORY_OK = True
-except ImportError:
-    MEMORY_OK = False
 
 try:
     from orchestrator.orchestrator import VantaOrchestrator
     ORCH_OK = True
 except ImportError:
     ORCH_OK = False
+
+try:
+    from vanta_knowledge import memory as vanta_memory
+    MEMORY_OK = True
+except ImportError:
+    MEMORY_OK = False
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -88,6 +87,15 @@ Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
 client = Groq(api_key=GROQ_API_KEY)
 if ORCH_OK:
     orchestrator = VantaOrchestrator(client, MODEL)
+if MEMORY_OK:
+    vanta_memory.init_db()
+    # One-time seed so the profile knows the name from config, not just
+    # from someone eventually typing "my name is ..." in chat. Routed
+    # through extract_memories (public API) rather than touching memory's
+    # internals directly; harmless to repeat on every restart — the same
+    # dedup path that reinforces any repeated memory handles it.
+    if USER:
+        vanta_memory.extract_memories(f"My name is {USER}.", source="config")
 
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
@@ -393,10 +401,7 @@ genuinely need no tool — plain conversation, explanations, opinions."""
             except Exception:
                 args = {}
             print(f"🔧 Tool call: {tc.function.name}({args})")
-            try:
-                result = execute_tool(tc.function.name, args, task, sid)
-            except Exception as exc:
-                result = f"Tool {tc.function.name} failed: {exc}"
+            result = execute_tool(tc.function.name, args, task, sid)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -491,25 +496,6 @@ def get_rag(msg: str) -> str:
     except Exception:
         return ""
 
-
-def get_boot_status() -> dict:
-    """Single source of truth for subsystem availability shown by the UI."""
-    if not RAG_OK:
-        knowledge = "UNAVAILABLE"
-    else:
-        try:
-            knowledge = knowledge_status()
-        except Exception:
-            knowledge = "UNAVAILABLE"
-    core = "READY" if GROQ_API_KEY and client and MODEL else "UNAVAILABLE"
-    return {
-        "ui": "INITIALIZING",
-        "core": core,
-        "knowledge": knowledge,
-        # PTT capture/transcription exists; wake-word, TTS, and full duplex do not.
-        "voice": "PARTIAL",
-    }
-
 def get_google(msg: str) -> str:
     if not GOOGLE_OK:
         return ""
@@ -522,11 +508,6 @@ def get_google(msg: str) -> str:
 def build_prompt(sid: str, user_msg: str, mode: str, rag: str, google: str,
                   effort: str = "medium") -> list:
     system = get_system_code(effort) if mode == "CODE" else get_system_chat(effort)
-
-    if MEMORY_OK:
-        profile = get_profile()
-        if profile:
-            system += "\n[What you know about the user]\n" + profile
 
     # Inject context SILENTLY — no headers that would leak "search results" phrasing
     if rag or google:
@@ -556,27 +537,19 @@ def stream_response(sid: str, messages: list, mode: str,
                      reasoning_effort: str = None, model: str = None) -> str:
     """Stream LLM output to the client token-by-token via Socket.IO."""
     full = ""
-    active_model = model or MODEL
     params = dict(
-        model=active_model,
+        model=model or MODEL,
         messages=messages,
         max_tokens=4096 if mode == "CODE" else 1200,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
+        include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
+                                   # default — we never read that field, so on
+                                   # short/trivial input the model can spend its
+                                   # whole turn there and leave content empty.
     )
-    # FIX: include_reasoning is GPT-OSS specific; only add it for those models
-    # to avoid API errors on other models.
-    if "gpt-oss" in active_model:
-        params["include_reasoning"] = False
-
-    # FIX: reasoning_effort is only supported by reasoning models.
-    # Don't pass it to models that will reject it.
     if reasoning_effort:
-        if any(r in active_model for r in ("deepseek", "r1", "reasoning", "o1", "o3")):
-            params["reasoning_effort"] = reasoning_effort
-        else:
-            print(f"⚠️  reasoning_effort='{reasoning_effort}' ignored for model={active_model!r}")
-
+        params["reasoning_effort"] = reasoning_effort
     print(f"🟡 Calling Groq (stream): model={params['model']!r} effort={reasoning_effort!r}")
     try:
         for chunk in client.chat.completions.create(**params):
@@ -595,7 +568,7 @@ def stream_response(sid: str, messages: list, mode: str,
             except NameError:
                 print("    No chunks received at all.")
     except AuthenticationError:
-        print(f"🔴 stream_response: Groq API key is invalid or expired")
+        print("🔴 stream_response: Groq API key is invalid or expired")
         socketio.emit("error", {"message":
             "Your Groq API key is invalid or expired — get a fresh one at "
             "console.groq.com and update it in .env, then restart the server."},
@@ -629,25 +602,32 @@ def stream_thinking(sid: str, messages: list) -> str:
 def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None,
                reasoning_effort: str = None, model: str = None) -> str:
     """Non-streaming single call (used for critique pass)."""
-    active_model = model or MODEL
     params = dict(
-        model=active_model, messages=messages,
+        model=model or MODEL, messages=messages,
         max_tokens=max_tok or (4096 if mode == "CODE" else 1200),
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
+        include_reasoning=False,
     )
-    if "gpt-oss" in active_model:
-        params["include_reasoning"] = False
     if reasoning_effort:
-        if any(r in active_model for r in ("deepseek", "r1", "reasoning", "o1", "o3")):
-            params["reasoning_effort"] = reasoning_effort
+        params["reasoning_effort"] = reasoning_effort
     resp = client.chat.completions.create(**params)
-    return resp.choices[0].message.content or ""
+    return resp.choices[0].message.content
 
 def save_history(sid: str, user: str, assistant: str):
     if sid not in conversations:
         conversations[sid] = []
     conversations[sid].append({"role": "user",      "content": user})
     conversations[sid].append({"role": "assistant",  "content": assistant})
+    if MEMORY_OK:
+        # Long-term profile extraction — separate from the in-session
+        # `conversations` buffer above, which "clear_memory" resets but
+        # this persists across restarts. Defensive: a disk/DB hiccup here
+        # should never take down the chat response itself, same pattern
+        # compact_history_if_needed() already uses for its own LLM call.
+        try:
+            vanta_memory.process_turn(user, assistant)
+        except Exception as e:
+            print(f"⚠️  vanta_memory.process_turn failed: {e}")
 
 COMPACT_AFTER = 24   # once a session's history exceeds this many messages...
 COMPACT_KEEP  = 12   # ...summarize everything except the most recent N
@@ -711,9 +691,7 @@ def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: boo
     absolute (Path("/workspace") / "/etc/passwd" == Path("/etc/passwd")),
     and a bare "../../.." would escape it too. A model output can't be
     trusted to never produce either, so this is enforced here rather than
-    hoped for upstream.
-
-    FIX: Returns the list of filenames that were actually written."""
+    hoped for upstream."""
     target_dir = Path(target_dir).resolve()
     safe_filenames = []
     for filename in filenames:
@@ -734,25 +712,15 @@ def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: boo
                 subprocess.Popen(["open", "-a", "Visual Studio Code", str(primary_path)])
         except Exception:
             pass
-    return safe_filenames
 
 def parse_file(text: str, sid: str) -> dict:
     """Backward-compatible wrapper — parses AND writes straight to the real
-    workspace, same as before. Existing call sites keep working unchanged.
-
-    FIX: Now reflects which files were actually written after security filtering."""
+    workspace, same as before. Existing call sites keep working unchanged."""
     parsed = parse_code_blocks(text)
     if not parsed["saved"]:
         return parsed
-    safe = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
-    parsed["filenames"] = safe
+    write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
     return parsed
-
-
-def _plain_repair_code(text: str) -> str:
-    """Remove an optional single markdown fence from a plain repair."""
-    match = re.fullmatch(r"\s*```[^\n]*\n([\s\S]*?)```\s*", text)
-    return match.group(1) if match else text.strip()
 
 # ── Staging: test before publishing ─────────────────────────────────────
 # Same principle as Claude's own scratch-space workflow — write and test in
@@ -769,14 +737,13 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
 
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     filenames, codes, run_cmd = parsed["filenames"], parsed["codes"], parsed["run_cmd"]
-    argv = parse_run_command(run_cmd)
     write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
 
     log = []
     for attempt in range(1, max_attempts + 1):
         try:
             result = subprocess.run(
-                argv, shell=False, cwd=str(STAGING_DIR),
+                run_cmd, shell=True, cwd=str(STAGING_DIR),
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
@@ -815,18 +782,15 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
         if fixed["saved"]:
             filenames, codes = fixed["filenames"], fixed["codes"]
             run_cmd = fixed["run_cmd"] or run_cmd
-            argv = parse_run_command(run_cmd)
             write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
 
     return {"success": False, "attempts": max_attempts, "log": log}
 
-# FIX: run_cmd now updates the command if the fix response provides a new RUN line.
-def run_cmd(cmd: str, sid: str, retries: int = 4, target_filenames: list[str] | None = None) -> str:
-    argv = parse_run_command(cmd)
+def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
     for attempt in range(retries):
         try:
             proc = subprocess.run(
-                argv, shell=False, capture_output=True,
+                cmd, shell=True, capture_output=True,
                 text=True, timeout=30, cwd=WORKSPACE,
             )
             if proc.returncode == 0:
@@ -837,21 +801,9 @@ def run_cmd(cmd: str, sid: str, retries: int = 4, target_filenames: list[str] | 
                 fix = call_once([
                     {"role": "system", "content": get_system_code("medium")},
                     {"role": "user",   "content":
-                        f"Fix this error. Return corrected code in the same FILENAME/code/RUN format.\n\n"
-                        f"Files to repair: {', '.join(target_filenames or [])}\nError:\n{proc.stderr}"},
+                        f"Fix this error, output ONLY corrected code:\n\nError:\n{proc.stderr}"},
                 ], "CODE", max_tok=2048, temp=0.05)
-                parsed = parse_code_blocks(fix)
-                if parsed["saved"]:
-                    safe = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
-                    parsed["filenames"] = safe
-                    if safe:
-                        target_filenames = safe
-                elif target_filenames and fix.strip():
-                    primary = target_filenames[0]
-                    write_and_open([primary], {primary: _plain_repair_code(fix)}, WORKSPACE)
-                if parsed.get("run_cmd"):
-                    cmd = parsed["run_cmd"]
-                    argv = parse_run_command(cmd)
+                parse_file(fix, sid)
                 time.sleep(1)
             else:
                 return f"⚠ Failed after {retries} attempts:\n{proc.stderr[:500]}"
@@ -978,23 +930,6 @@ def handle_chat(data):
         if is_weather and not weather_ctx and GOOGLE_OK:
             google_ctx = get_google(msg)
 
-    # The normal chat event is the primary tool path. Tools are selected from
-    # the same routing signals rather than requiring a second frontend event.
-    if mode == "CODE" or is_weather or (needs_knowledge and GOOGLE_OK):
-        try:
-            result = call_with_tools(sid, msg, effort="medium")
-        except Exception as exc:
-            result = f"Tool-calling failed safely: {exc}"
-        save_history(sid, msg, result)
-        if MEMORY_OK:
-            try:
-                process_turn(msg, result)
-            except Exception as exc:
-                print(f"⚠️  Memory update failed: {exc}")
-        socketio.emit("response", {"text": result, "model": MODEL}, room=sid)
-        socketio.emit("status", {"state": "idle"}, room=sid)
-        return
-
     is_ui = mode == "CODE" and is_ui_task(msg)
     socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode)
@@ -1040,11 +975,6 @@ def handle_chat(data):
         final = stream_response(sid, messages, mode, reasoning_effort=effort, model=routed_model)
 
     save_history(sid, msg, final)
-    if MEMORY_OK:
-        try:
-            process_turn(msg, final)
-        except Exception as exc:
-            print(f"⚠️  Memory update failed: {exc}")
     compact_history_if_needed(sid)
     socketio.emit("stream_done", {"model": MODEL, "mode": mode}, room=sid)
     socketio.emit("status", {"state": "idle"}, room=sid)
@@ -1053,8 +983,8 @@ def handle_chat(data):
     info = parse_file(final, sid)
     if info.get("run_cmd"):
         socketio.emit("status", {"state": "thinking",
-            "message": f"Running…"}, room=sid)
-        out = run_cmd(info["run_cmd"], sid, target_filenames=info.get("filenames"))
+            "message": f"Running: {info['run_cmd'][:80]}…"}, room=sid)
+        out = run_cmd(info["run_cmd"], sid)
         if out:
             socketio.emit("stream_chunk", {"chunk": f"\n```\n{out}\n```"}, room=sid)
             socketio.emit("stream_done",  {"model": "Shell"}, room=sid)
@@ -1129,23 +1059,17 @@ def handle_orchestrate(data):
     finally:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
-@socketio.on("clear_chat")
-@socketio.on("clear_memory")  # Backward-compatible alias; this clears chat only.
+@socketio.on("clear_memory")
 def handle_clear():
     conversations[request.sid] = []
-    emit("status", {"state": "idle", "message": "Chat cleared. Persistent memory unchanged."})
+    emit("status", {"state": "idle", "message": "Memory cleared."})
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  HTTP ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", agent_name=AGENT, boot_status=get_boot_status())
-
-
-@app.route("/api/boot-status")
-def boot_status():
-    return jsonify(get_boot_status())
+    return render_template("index.html", agent_name=AGENT, rag_ok=RAG_OK)
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
@@ -1173,7 +1097,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n{'='*55}")
-    print(f"  VANTA v4 — Natural Intelligence Mode")
+    print("  VANTA v4 — Natural Intelligence Mode")
     print(f"  http://localhost:{port}")
     print(f"  RAG: {'✓' if RAG_OK else '✗'}  Google: {'✓' if GOOGLE_OK else '✗'}  Orch: {'✓' if ORCH_OK else '✗'}  Watcher: {'✓' if WATCHER_OK else '✗'}")
     print(f"{'='*55}\n")

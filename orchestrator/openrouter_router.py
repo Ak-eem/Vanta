@@ -23,7 +23,7 @@ from .model_router import FREE_MODEL_PRIORITIES
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLASH_MODEL = "google/gemini-2.0-flash-exp:free"
-DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a5b:free"
 DEFAULT_BRAIN_FALLBACK_MODEL = "z-ai/glm-5.2:free"
 
 

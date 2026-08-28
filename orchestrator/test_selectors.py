@@ -44,6 +44,7 @@ async def check_model(agent: BrowserAgent, model_key: str):
             found = el is not None
         except Exception as e:
             found = False
+            print(f"      ⚠ {label} raised {type(e).__name__}: {e}")
         results[label] = found
         mark = "✅" if found else "❌"
         print(f"  {mark} {label:14} {sel}")

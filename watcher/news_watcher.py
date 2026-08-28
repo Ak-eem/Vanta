@@ -5,7 +5,6 @@ so restarts don't re-trigger old stories.
 """
 
 import json
-import time
 import threading
 from pathlib import Path
 
