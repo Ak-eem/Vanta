@@ -1,0 +1,133 @@
+name: Apply server security hardening
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'security: harden server process') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply and commit security hardening
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("vanta_ui/server.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = "import os, re, sys, time, json, shlex, subprocess, tempfile, uuid"
+          new = "import os, re, sys, time, json, shlex, subprocess, tempfile, uuid, secrets"
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''BASE = Path(__file__).parent
+app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
+app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "vanta-v4")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")'''
+          new = '''BASE = Path(__file__).parent
+
+
+def _load_flask_secret() -> str:
+    """Use FLASK_SECRET or generate and persist a private local secret."""
+    configured = os.environ.get("FLASK_SECRET", "").strip()
+    if configured:
+        return configured
+
+    secret_path = Path(os.environ.get("VANTA_FLASK_SECRET_FILE", str(BASE / ".flask_secret")))
+    try:
+        if secret_path.exists():
+            persisted = secret_path.read_text(encoding="utf-8").strip()
+            if persisted:
+                return persisted
+
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        generated = secrets.token_urlsafe(32)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(str(secret_path), flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as secret_file:
+            secret_file.write(generated + "\\n")
+        try:
+            secret_path.chmod(0o600)
+        except OSError:
+            pass
+        return generated
+    except OSError as exc:
+        raise RuntimeError(
+            "FLASK_SECRET is not set and the generated secret could not be persisted"
+        ) from exc
+
+
+def _cors_allowed_origins() -> list[str]:
+    configured = os.environ.get(
+        "VANTA_CORS_ALLOWED_ORIGINS",
+        os.environ.get(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:3000,http://127.0.0.1:3000",
+        ),
+    )
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    return origins or ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
+app.config["SECRET_KEY"] = _load_flask_secret()
+socketio = SocketIO(app, cors_allowed_origins=_cors_allowed_origins(), async_mode="threading")'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = 'subprocess.Popen(["code", str(primary_path)], shell=True)'
+          new = 'subprocess.Popen(["code", str(primary_path)], shell=False)'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''    argv = parse_run_command(run_cmd)
+    write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)'''
+          new = '''    try:
+        argv = parse_run_command(run_cmd)
+    except ValueError as exc:
+        return {"success": False, "reason": f"invalid_run_command: {exc}"}
+    write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''            argv = parse_run_command(run_cmd)
+            write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)'''
+          new = '''            try:
+                argv = parse_run_command(run_cmd)
+            except ValueError as exc:
+                log.append({"attempt": attempt, "error": f"invalid_run_command: {exc}"})
+                return {"success": False, "attempts": attempt, "log": log}
+            write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''    argv = parse_run_command(cmd)
+    for attempt in range(retries):'''
+          new = '''    try:
+        argv = parse_run_command(cmd)
+    except ValueError as exc:
+        return f"Invalid RUN command: {exc}"
+    for attempt in range(retries):'''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          assert "shell=True" not in text
+          assert 'cors_allowed_origins="*"' not in text
+          assert '"vanta-v4"' not in text
+          assert text.count("parse_run_command(") == 4
+          path.write_text(text, encoding="utf-8")
+          PY
+          rm .github/workflows/apply-server-security-fix.yml
+          git config user.name "Ak-eem"
+          git config user.email "akeemganikale10@gmail.com"
+          git add vanta_ui/server.py .github/workflows/apply-server-security-fix.yml
+          git commit -m "security: harden server process, CORS, and Flask secret handling"
+          git push origin HEAD:main
