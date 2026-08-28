@@ -10,6 +10,7 @@ on a slow connection. This has zero downloads and works immediately.
 
 import logging
 import re
+import threading
 from pathlib import Path
 
 
@@ -17,6 +18,10 @@ KNOWLEDGE_DIR = Path(__file__).parent
 MAX_KNOWLEDGE_FILES = 500
 MAX_KNOWLEDGE_FILE_SIZE = 2 * 1024 * 1024
 logger = logging.getLogger(__name__)
+_CACHE_LOCK = threading.RLock()
+_CACHED_CHUNKS = None
+_CACHED_SIGNATURE = None
+_CACHE_UNAVAILABLE = False
 
 
 def chunk_markdown(text: str, chunk_size: int = 600) -> list:
@@ -101,9 +106,27 @@ def _knowledge_files() -> list:
 
 
 def load_knowledge_base() -> list:
+    global _CACHED_CHUNKS, _CACHED_SIGNATURE, _CACHE_UNAVAILABLE
+    files = _knowledge_files()
+    signature = []
+    try:
+        signature = [(str(filepath), filepath.stat().st_mtime_ns, filepath.stat().st_size)
+                     for filepath in files]
+    except OSError as exc:
+        logger.warning("Unable to inspect knowledge files: %s", exc)
+        with _CACHE_LOCK:
+            _CACHE_UNAVAILABLE = True
+            _CACHED_CHUNKS = []
+            _CACHED_SIGNATURE = None
+        return []
+
+    with _CACHE_LOCK:
+        if _CACHED_CHUNKS is not None and _CACHED_SIGNATURE == signature:
+            return _CACHED_CHUNKS
+
     chunks = []
     knowledge_root = KNOWLEDGE_DIR.resolve()
-    for filepath in _knowledge_files():
+    for filepath in files:
         try:
             text = filepath.read_text(encoding='utf-8')
             for chunk in chunk_markdown(text):
@@ -119,7 +142,28 @@ def load_knowledge_base() -> list:
                 exc,
                 exc_info=True,
             )
-    return chunks
+    with _CACHE_LOCK:
+        _CACHED_CHUNKS = chunks
+        _CACHED_SIGNATURE = signature
+        _CACHE_UNAVAILABLE = False
+        return _CACHED_CHUNKS
+
+
+def reload_knowledge_base() -> list:
+    """Invalidate and rebuild the in-memory knowledge cache."""
+    global _CACHED_CHUNKS, _CACHED_SIGNATURE
+    with _CACHE_LOCK:
+        _CACHED_CHUNKS = None
+        _CACHED_SIGNATURE = None
+    return load_knowledge_base()
+
+
+def knowledge_status() -> str:
+    """Return READY, EMPTY, or UNAVAILABLE based on the actual RAG state."""
+    load_knowledge_base()
+    if _CACHE_UNAVAILABLE:
+        return "UNAVAILABLE"
+    return "READY" if _CACHED_CHUNKS else "EMPTY"
 
 
 def score_chunk(chunk: str, query_words: list) -> float:

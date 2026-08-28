@@ -161,10 +161,10 @@
   <div id="boot-inner">
     <div id="boot-header">initializing</div>
     <div id="boot-modules">
-      <div class="bmod" data-ready="true"><span class="bmod-name">UI</span><span class="bmod-status">···</span></div>
-      <div class="bmod" data-ready="true"><span class="bmod-name">Core</span><span class="bmod-status">···</span></div>
-      <div class="bmod" data-ready="{{ 'true' if rag_ok else 'false' }}"><span class="bmod-name">Knowledge</span><span class="bmod-status">···</span></div>
-      <div class="bmod" data-ready="false" data-status="standby"><span class="bmod-name">Voice Engine</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-status="{{ boot_status.ui }}"><span class="bmod-name">UI</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-status="{{ boot_status.core }}"><span class="bmod-name">Core</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-status="{{ boot_status.knowledge }}"><span class="bmod-name">Knowledge</span><span class="bmod-status">···</span></div>
+      <div class="bmod" data-status="{{ boot_status.voice }}"><span class="bmod-name">Voice Engine</span><span class="bmod-status">···</span></div>
     </div>
     <div id="boot-bar-wrap">
       <div id="boot-track"><div id="boot-fill"></div></div>
@@ -225,7 +225,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
         </button>
         <div id="ptt-label">hold to speak</div>
-        <div id="voice-hint-text">say "hey vanta" to speak</div>
+        <div id="voice-hint-text">hold the button to speak</div>
         <div id="demo-btns">
           <button class="demo-btn" id="weather-demo-btn">"what's the weather"</button>
           <button class="demo-btn" id="directions-demo-btn">"directions to the coffee shop"</button>
@@ -509,15 +509,19 @@
       setTimeout(() => {
         mod.style.opacity='1'; mod.style.transform='translateY(0)';
         const st=mod.querySelector('.bmod-status');
-        const ready = mod.dataset.ready === 'true';
-        const customStatus = mod.dataset.status;
-        st.textContent = customStatus || (ready ? 'ready' : 'unavailable');
-        st.style.color = ready ? '#666' : (customStatus === 'standby' ? '#4b6a78' : '#ff9500');
+        const subsystemStatus = mod.dataset.status || 'UNAVAILABLE';
+        st.textContent = subsystemStatus.toLowerCase();
+        st.style.color = subsystemStatus === 'READY' ? '#666'
+          : (subsystemStatus === 'PARTIAL' || subsystemStatus === 'INITIALIZING' ? '#4b6a78' : '#ff9500');
       }, i * 180);
     });
     statusEl.textContent='initializing';
     await barPromise;
     statusEl.textContent='ready';
+    const uiMod = mods[0];
+    uiMod.dataset.status = 'READY';
+    uiMod.querySelector('.bmod-status').textContent = 'ready';
+    uiMod.querySelector('.bmod-status').style.color = '#666';
     await wait(400);
 
     const bootEl=document.getElementById('boot');

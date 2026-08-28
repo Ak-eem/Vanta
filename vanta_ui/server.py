@@ -6,7 +6,7 @@ VANTA Server v4 — Natural Intelligence Mode
 - Parallel classify + search before LLM call to minimize latency
 """
 
-import os, re, sys, time, json, shlex, subprocess, tempfile, uuid
+import os, re, sys, time, json, subprocess, tempfile, uuid
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +16,7 @@ from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.commands import parse_run_command
 
 try:
     from .checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
@@ -36,7 +37,7 @@ except Exception as e:
 
 # ── Optional modules ───────────────────────────────────────────────────────────
 try:
-    from vanta_knowledge.rag import query_rag
+    from vanta_knowledge.rag import query_rag, knowledge_status
     RAG_OK = True
 except ImportError:
     RAG_OK = False
@@ -392,7 +393,10 @@ genuinely need no tool — plain conversation, explanations, opinions."""
             except Exception:
                 args = {}
             print(f"🔧 Tool call: {tc.function.name}({args})")
-            result = execute_tool(tc.function.name, args, task, sid)
+            try:
+                result = execute_tool(tc.function.name, args, task, sid)
+            except Exception as exc:
+                result = f"Tool {tc.function.name} failed: {exc}"
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -486,6 +490,25 @@ def get_rag(msg: str) -> str:
         return query_rag(msg, top_k=3) or ""
     except Exception:
         return ""
+
+
+def get_boot_status() -> dict:
+    """Single source of truth for subsystem availability shown by the UI."""
+    if not RAG_OK:
+        knowledge = "UNAVAILABLE"
+    else:
+        try:
+            knowledge = knowledge_status()
+        except Exception:
+            knowledge = "UNAVAILABLE"
+    core = "READY" if GROQ_API_KEY and client and MODEL else "UNAVAILABLE"
+    return {
+        "ui": "INITIALIZING",
+        "core": core,
+        "knowledge": knowledge,
+        # PTT capture/transcription exists; wake-word, TTS, and full duplex do not.
+        "voice": "PARTIAL",
+    }
 
 def get_google(msg: str) -> str:
     if not GOOGLE_OK:
@@ -678,28 +701,6 @@ def parse_code_blocks(text: str) -> dict:
         "run_cmd": run.group(1).strip() if run else None,
     }
 
-def parse_run_command(cmd: str) -> list[str]:
-    """Parse a RUN command without allowing shell control syntax."""
-    if not cmd or not cmd.strip():
-        raise ValueError("RUN is empty")
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=";|&<>`\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    try:
-        tokens = list(lexer)
-    except ValueError as exc:
-        raise ValueError(f"malformed RUN quoting: {exc}") from exc
-    punctuation = set(lexer.punctuation_chars) | {"\n"}
-    if any(token and all(char in punctuation for char in token) for token in tokens):
-        raise ValueError(
-            "RUN command contains shell chaining; use one executable and "
-            "arguments without ;, |, &, <, >, `, or newlines."
-        )
-    try:
-        return shlex.split(cmd)
-    except ValueError as exc:
-        raise ValueError(f"malformed RUN quoting: {exc}") from exc
-
 def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: bool = True):
     """The actual disk-write + VS Code side effects, separated out so
     staging can write to a temp dir silently, and only the real workspace
@@ -746,6 +747,12 @@ def parse_file(text: str, sid: str) -> dict:
     safe = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
     parsed["filenames"] = safe
     return parsed
+
+
+def _plain_repair_code(text: str) -> str:
+    """Remove an optional single markdown fence from a plain repair."""
+    match = re.fullmatch(r"\s*```[^\n]*\n([\s\S]*?)```\s*", text)
+    return match.group(1) if match else text.strip()
 
 # ── Staging: test before publishing ─────────────────────────────────────
 # Same principle as Claude's own scratch-space workflow — write and test in
@@ -814,7 +821,7 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
     return {"success": False, "attempts": max_attempts, "log": log}
 
 # FIX: run_cmd now updates the command if the fix response provides a new RUN line.
-def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
+def run_cmd(cmd: str, sid: str, retries: int = 4, target_filenames: list[str] | None = None) -> str:
     argv = parse_run_command(cmd)
     for attempt in range(retries):
         try:
@@ -830,12 +837,19 @@ def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
                 fix = call_once([
                     {"role": "system", "content": get_system_code("medium")},
                     {"role": "user",   "content":
-                        f"Fix this error, output ONLY corrected code:\n\nError:\n{proc.stderr}"},
+                        f"Fix this error. Return corrected code in the same FILENAME/code/RUN format.\n\n"
+                        f"Files to repair: {', '.join(target_filenames or [])}\nError:\n{proc.stderr}"},
                 ], "CODE", max_tok=2048, temp=0.05)
-                parsed = parse_file(fix, sid)
-                # FIX: Update cmd if the fix provided a new RUN command
+                parsed = parse_code_blocks(fix)
+                if parsed["saved"]:
+                    safe = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
+                    parsed["filenames"] = safe
+                elif target_filenames and fix.strip():
+                    primary = target_filenames[0]
+                    write_and_open([primary], {primary: _plain_repair_code(fix)}, WORKSPACE)
                 if parsed.get("run_cmd"):
                     cmd = parsed["run_cmd"]
+                    argv = parse_run_command(cmd)
                 time.sleep(1)
             else:
                 return f"⚠ Failed after {retries} attempts:\n{proc.stderr[:500]}"
@@ -962,6 +976,23 @@ def handle_chat(data):
         if is_weather and not weather_ctx and GOOGLE_OK:
             google_ctx = get_google(msg)
 
+    # The normal chat event is the primary tool path. Tools are selected from
+    # the same routing signals rather than requiring a second frontend event.
+    if mode == "CODE" or is_weather or (needs_knowledge and GOOGLE_OK):
+        try:
+            result = call_with_tools(sid, msg, effort="medium")
+        except Exception as exc:
+            result = f"Tool-calling failed safely: {exc}"
+        save_history(sid, msg, result)
+        if MEMORY_OK:
+            try:
+                process_turn(msg, result)
+            except Exception as exc:
+                print(f"⚠️  Memory update failed: {exc}")
+        socketio.emit("response", {"text": result, "model": MODEL}, room=sid)
+        socketio.emit("status", {"state": "idle"}, room=sid)
+        return
+
     is_ui = mode == "CODE" and is_ui_task(msg)
     socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode)
@@ -1008,7 +1039,10 @@ def handle_chat(data):
 
     save_history(sid, msg, final)
     if MEMORY_OK:
-        process_turn(msg, final)
+        try:
+            process_turn(msg, final)
+        except Exception as exc:
+            print(f"⚠️  Memory update failed: {exc}")
     compact_history_if_needed(sid)
     socketio.emit("stream_done", {"model": MODEL, "mode": mode}, room=sid)
     socketio.emit("status", {"state": "idle"}, room=sid)
@@ -1018,7 +1052,7 @@ def handle_chat(data):
     if info.get("run_cmd"):
         socketio.emit("status", {"state": "thinking",
             "message": f"Running…"}, room=sid)
-        out = run_cmd(info["run_cmd"], sid)
+        out = run_cmd(info["run_cmd"], sid, target_filenames=info.get("filenames"))
         if out:
             socketio.emit("stream_chunk", {"chunk": f"\n```\n{out}\n```"}, room=sid)
             socketio.emit("stream_done",  {"model": "Shell"}, room=sid)
@@ -1093,17 +1127,23 @@ def handle_orchestrate(data):
     finally:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
-@socketio.on("clear_memory")
+@socketio.on("clear_chat")
+@socketio.on("clear_memory")  # Backward-compatible alias; this clears chat only.
 def handle_clear():
     conversations[request.sid] = []
-    emit("status", {"state": "idle", "message": "Memory cleared."})
+    emit("status", {"state": "idle", "message": "Chat cleared. Persistent memory unchanged."})
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  HTTP ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", agent_name=AGENT)
+    return render_template("index.html", agent_name=AGENT, boot_status=get_boot_status())
+
+
+@app.route("/api/boot-status")
+def boot_status():
+    return jsonify(get_boot_status())
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():

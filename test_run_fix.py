@@ -1,6 +1,6 @@
 import subprocess
 
-from vanta_ui.server import parse_run_command
+from utils.commands import parse_run_command
 
 
 argv = parse_run_command("python app.py")
