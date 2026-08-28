@@ -13,6 +13,7 @@ Design:
 import json
 import re
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,9 +22,11 @@ from typing import Optional
 
 
 DEFAULT_DB = Path.home() / ".vanta" / "vanta_memory.db"
+_CON_LOCK = threading.RLock()
 
-# ── Schema ───────────────────────────────────────────────────────────────────
-INIT_SQL = """
+# ─────────────────────────────────────────────────────────────────────────────
+# Schema ───────────────────────────────────────────────────────────────────────
+_INIT_SQL = """
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS memory_entries (
@@ -43,11 +46,11 @@ CREATE TABLE IF NOT EXISTS memory_meta (
 );
 
 CREATE TABLE IF NOT EXISTS memory_audit (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    action     TEXT NOT NULL CHECK(action IN ('extract','update','consolidate','review')),
-    entry_id   INTEGER,
-    detail     TEXT,
-    created_at REAL NOT NULL
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    action      TEXT NOT NULL CHECK(action IN ('extract','update','consolidate','review')),
+    entry_id    INTEGER,
+    detail      TEXT,
+    created_at  REAL NOT NULL
 );
 
 -- FTS5 virtual table + triggers for sync
@@ -72,37 +75,40 @@ CREATE INDEX IF NOT EXISTS idx_created ON memory_entries(created_at);
 CREATE INDEX IF NOT EXISTS idx_consolidated ON memory_entries(consolidated);
 """
 
-# ── Extraction patterns ──────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extraction patterns ──────────────────────────────────────────────────────────
 _EXTRACT_PATTERNS = [
     # Explicit identity
     (r"\bmy name is\s+(.+?)(?:[.!?]|$)", "fact", 1.0),
     (r"\bi am\s+(.+?)(?:[.!?]|$)", "fact", 0.9),
     (r"\bi'm\s+(.+?)(?:[.!?]|$)", "fact", 0.9),
     # Preferences
-    (r"\bi (?:like|love|enjoy|prefer)\s+(.+?)(?:[.!?]|$)", "preference", 0.85),
-    (r"\bi (?:don't like|hate|dislike|prefer not to)\s+(.+?)(?:[.!?]|$)", "preference", 0.85),
-    (r"\bi always\s+(.+?)(?:[.!?]|$)", "preference", 0.8),
-    (r"\bi never\s+(.+?)(?:[.!?]|$)", "preference", 0.8),
+    (r"\b(?:like|love|enjoy|prefer)\s+(.+?)(?:[.!?]|$)", "preference", 0.85),
+    (r"\b(?:don't like|hate|dislike|prefer not to)\s+(.+?)(?:[.!?]|$)", "preference", 0.85),
+    (r"\balways\s+(.+?)(?:[.!?]|$)", "preference", 0.8),
+    (r"\bnever\s+(.+?)(?:[.!?]|$)", "preference", 0.8),
     # Skills / knowledge
-    (r"\bi (?:know|can|know how to)\s+(.+?)(?:[.!?]|$)", "skill", 0.75),
-    (r"\bi work as\s+a[n]?\s+(.+?)(?:[.!?]|$)", "skill", 0.9),
+    (r"\b(?:know|can|know how to)\s+(.+?)(?:[.!?]|$)", "skill", 0.75),
+    (r"\bwork as\s+a[n]?\s+(.+?)(?:[.!?]|$)", "skill", 0.9),
     (r"\bi'm a[n]?\s+(.+?)(?:[.!?]|$)", "skill", 0.9),
     # Tasks / goals
-    (r"\bi need to\s+(.+?)(?:[.!?]|$)", "task", 0.7),
-    (r"\bi want to\s+(.+?)(?:[.!?]|$)", "task", 0.7),
+    (r"\bneed to\s+(.+?)(?:[.!?]|$)", "task", 0.7),
+    (r"\bwant to\s+(.+?)(?:[.!?]|$)", "task", 0.7),
     (r"\bi'm trying to\s+(.+?)(?:[.!?]|$)", "task", 0.7),
     # Events
-    (r"\bi (?:just|recently)\s+(.+?)(?:[.!?]|$)", "event", 0.6),
+    (r"\b(?:just|recently)\s+(.+?)(?:[.!?]|$)", "event", 0.6),
 ]
 
 
-# ── DB lifecycle ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# DB lifecycle ──────────────────────────────────────────────────────────────────
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Initialise the memory database. Creates tables, indexes, FTS5, WAL."""
     path = db_path or DEFAULT_DB
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path), check_same_thread=False)
-    con.executescript(INIT_SQL)
+    con.executescript(_INIT_SQL)
     con.commit()
     return con
 
@@ -111,21 +117,24 @@ def _get_con(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Lazy singleton per path (not thread-safe across paths, fine for single-process)."""
     path = db_path or DEFAULT_DB
     cache_key = f"_con_{path}"
-    if cache_key not in _get_con.__dict__:
-        _get_con.__dict__[cache_key] = init_db(path)
-    return _get_con.__dict__[cache_key]
+    with _CON_LOCK:
+        if cache_key not in _get_con.__dict__:
+            _get_con.__dict__[cache_key] = init_db(path)
+        return _get_con.__dict__[cache_key]
 
 
 def close_db(db_path: Optional[Path] = None) -> None:
     """Close and remove the cached connection for a database path."""
     path = db_path or DEFAULT_DB
     cache_key = f"_con_{path}"
-    con = _get_con.__dict__.pop(cache_key, None)
-    if con is not None:
-        con.close()
+    with _CON_LOCK:
+        con = _get_con.__dict__.pop(cache_key, None)
+        if con is not None:
+            con.close()
 
 
-# ── Core CRUD ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Core CRUD ─────────────────────────────────────────────────────────────────────
 def add_memory(
     kind: str,
     content: str,
@@ -135,19 +144,25 @@ def add_memory(
 ) -> int:
     """Insert a single memory entry. Returns the row id."""
     con = _get_con(db_path)
-    now = time.time()
-    cur = con.execute(
-        """INSERT INTO memory_entries(kind, content, source, confidence, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (kind, content.strip(), source, confidence, now, now),
-    )
-    entry_id = cur.lastrowid
-    con.execute(
-        "INSERT INTO memory_audit(action, entry_id, detail, created_at) VALUES (?, ?, ?, ?)",
-        ("extract", entry_id, f"kind={kind} conf={confidence}", now),
-    )
-    con.commit()
-    return entry_id
+    with _CON_LOCK:
+        con.execute("BEGIN")
+        now = time.time()
+        try:
+            cur = con.execute(
+                """INSERT INTO memory_entries(kind, content, source, confidence, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (kind, content.strip(), source, confidence, now, now),
+            )
+            entry_id = cur.lastrowid
+            con.execute(
+                "INSERT INTO memory_audit(action, entry_id, detail, created_at) VALUES (?, ?, ?, ?)",
+                ("extract", entry_id, f"kind={kind} conf={confidence}", now),
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        return entry_id
 
 
 def _is_duplicate(content: str, kind: str, db_path: Optional[Path] = None) -> bool:
@@ -220,7 +235,8 @@ def search_memories(query: str, top_k: int = 5, db_path: Optional[Path] = None) 
     return results
 
 
-# ── Profile assembly ─────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Profile assembly ──────────────────────────────────────────────────────────────
 def get_profile(db_path: Optional[Path] = None) -> str:
     """Assemble a compact profile string from top-confidence facts/preferences."""
     con = _get_con(db_path)
@@ -261,117 +277,124 @@ def write_memory_md(path: Optional[Path] = None, db_path: Optional[Path] = None)
         lines.append(f"\n## {kind.capitalize()}s\n")
         for content, conf, ts in rows:
             dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            lines.append(f"- [{dt}] {content}  (conf: {conf:.2f})")
+            lines.append(f"- [{dt}] {content} (conf: {conf:.2f})")
 
     target.write_text("\n".join(lines), encoding="utf-8")
     return target
 
 
-# ── Consolidation ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Consolidation ─────────────────────────────────────────────────────────────────
 def consolidate(threshold_days: int = 30, db_path: Optional[Path] = None) -> Path:
     """Merge duplicate/similar entries, mark old as consolidated, write report.
     NEVER deletes anything."""
     con = _get_con(db_path)
     cutoff = time.time() - (threshold_days * 86400)
-
-    # Find potential duplicates: same kind + similar content (simple substring check)
-    rows = con.execute(
-        """SELECT id, kind, content, confidence, created_at
-           FROM memory_entries
-           WHERE consolidated = 0 AND created_at < ?
-           ORDER BY kind, created_at DESC""",
-        (cutoff,),
-    ).fetchall()
-
-    merged_count = 0
-    reports: list[str] = []
-    seen: set[int] = set()
-
-    for i, (id_a, kind_a, content_a, conf_a, ts_a) in enumerate(rows):
-        if id_a in seen:
-            continue
-        duplicates: list[tuple[int, str, float]] = []
-        for j in range(i + 1, len(rows)):
-            id_b, kind_b, content_b, conf_b, ts_b = rows[j]
-            if id_b in seen:
-                continue
-            if kind_a != kind_b:
-                continue
-            # Simple similarity: one contains the other or high word overlap
-            a_words = set(content_a.lower().split())
-            b_words = set(content_b.lower().split())
-            if not a_words or not b_words:
-                continue
-            overlap = len(a_words & b_words) / max(len(a_words), len(b_words))
-            if overlap >= 0.7 or content_a.lower() in content_b.lower() or content_b.lower() in content_a.lower():
-                duplicates.append((id_b, content_b, conf_b))
-                seen.add(id_b)
-
-        if duplicates:
-            seen.add(id_a)
-            # Merge: keep the newest/highest-confidence content, mark rest consolidated
-            best_content = content_a
-            best_conf = conf_a
-            for _id_b, content_b, conf_b in duplicates:
-                if conf_b > best_conf:
-                    best_conf = conf_b
-                    best_content = content_b
-
-            # Insert merged entry
-            now = time.time()
-            cur = con.execute(
-                """INSERT INTO memory_entries(kind, content, source, confidence, created_at, updated_at, consolidated)
-                   VALUES (?, ?, ?, ?, ?, ?, 0)""",
-                (kind_a, best_content, "consolidation", best_conf, now, now),
-            )
-            new_id = cur.lastrowid
-
-            # Mark originals consolidated
-            for dup_id, _, _ in [(id_a, "", 0)] + duplicates:
-                con.execute(
-                    "UPDATE memory_entries SET consolidated = 1 WHERE id = ?",
-                    (dup_id,),
-                )
-                con.execute(
-                    "INSERT INTO memory_audit(action, entry_id, detail, created_at) VALUES (?, ?, ?, ?)",
-                    ("consolidate", dup_id, f"merged into {new_id}", now),
-                )
-
-            merged_count += 1
-            reports.append(
-                f"Merged {len(duplicates)+1} '{kind_a}' entries into #{new_id}: '{best_content}'"
-            )
-
-    con.commit()
-
-    # Write report
     report_path = Path.home() / ".vanta" / "memory_consolidation_report.md"
-    report_lines = [
-        f"# Memory Consolidation Report\n",
-        f"_Run: {datetime.now().isoformat()}_\n",
-        f"Threshold: {threshold_days} days\n",
-        f"Merged groups: {merged_count}\n",
-    ]
-    if reports:
-        report_lines.append("\n## Actions\n")
-        for r in reports:
-            report_lines.append(f"- {r}")
-    else:
-        report_lines.append("\nNo duplicates found.\n")
 
+    with _CON_LOCK:
+        con.execute("BEGIN")
+        try:
+            # Find potential duplicates: same kind + similar content (simple substring check)
+            rows = con.execute(
+                """SELECT id, kind, content, confidence, created_at
+                   FROM memory_entries
+                   WHERE consolidated = 0 AND created_at < ?
+                   ORDER BY kind, created_at DESC""",
+                (cutoff,),
+            ).fetchall()
+
+            merged_count = 0
+            reports: list[str] = []
+            seen: set[int] = set()
+
+            for i, (id_a, kind_a, content_a, conf_a, ts_a) in enumerate(rows):
+                if id_a in seen:
+                    continue
+                duplicates: list[tuple[int, str, float]] = []
+                for j in range(i + 1, len(rows)):
+                    id_b, kind_b, content_b, conf_b, ts_b = rows[j]
+                    if id_b in seen:
+                        continue
+                    if kind_a != kind_b:
+                        continue
+                    # Simple similarity: one contains the other or high word overlap
+                    a_words = set(content_a.lower().split())
+                    b_words = set(content_b.lower().split())
+                    if not a_words or not b_words:
+                        continue
+                    overlap = len(a_words & b_words) / max(len(a_words), len(b_words))
+                    if overlap >= 0.7 or content_a.lower() in content_b.lower() or content_b.lower() in content_a.lower():
+                        duplicates.append((id_b, content_b, conf_b))
+                        seen.add(id_b)
+
+                if duplicates:
+                    seen.add(id_a)
+                    # Merge: keep the newest/highest-confidence content, mark rest consolidated
+                    best_content = content_a
+                    best_conf = conf_a
+                    for _id_b, content_b, conf_b in duplicates:
+                        if conf_b > best_conf:
+                            best_conf = conf_b
+                            best_content = content_b
+
+                    # Insert merged entry
+                    now = time.time()
+                    cur = con.execute(
+                        """INSERT INTO memory_entries(kind, content, source, confidence, created_at, updated_at, consolidated)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                        (kind_a, best_content, "consolidation", best_conf, now, now),
+                    )
+                    new_id = cur.lastrowid
+
+                    # Mark originals consolidated
+                    for dup_id, _, _ in [(id_a, "", 0)] + duplicates:
+                        con.execute(
+                            "UPDATE memory_entries SET consolidated = 1 WHERE id = ?",
+                            (dup_id,),
+                        )
+                        con.execute(
+                            "INSERT INTO memory_audit(action, entry_id, detail, created_at) VALUES (?, ?, ?, ?)",
+                            ("consolidate", dup_id, f"merged into {new_id}", now),
+                        )
+
+                    merged_count += 1
+                    reports.append(
+                        f"Merged {len(duplicates)+1} '{kind_a}' entries into #{new_id}: '{best_content}'"
+                    )
+
+            report_lines = [
+                "# Memory Consolidation Report\n",
+                f"_Run: {datetime.now().isoformat()}_\n",
+                f"Threshold: {threshold_days} days\n",
+                f"Merged groups: {merged_count}\n",
+            ]
+            if reports:
+                report_lines.append("\n## Actions\n")
+                for r in reports:
+                    report_lines.append(f"- {r}")
+            else:
+                report_lines.append("\nNo duplicates found.\n")
+
+            # Update meta
+            con.execute(
+                "INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)",
+                ("last_consolidation", str(time.time())),
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+
+    # Write report only after the database transaction has committed.
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
-
-    # Update meta
-    con.execute(
-        "INSERT OR REPLACE INTO memory_meta(key, value) VALUES (?, ?)",
-        ("last_consolidation", str(time.time())),
-    )
-    con.commit()
 
     return report_path
 
 
-# ── Conversation summarisation ───────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Conversation summarisation ────────────────────────────────────────────────────
 def summarize_conversation(turns: list[dict], db_path: Optional[Path] = None) -> str:
     """Extract a concise summary from a list of turn dicts {'role': ..., 'content': ...}.
     Returns the summary text (caller decides whether to store it)."""
@@ -387,7 +410,8 @@ def summarize_conversation(turns: list[dict], db_path: Optional[Path] = None) ->
     return summary
 
 
-# ── Post-turn hook ───────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-turn hook ────────────────────────────────────────────────────────────────
 def process_turn(
     user_text: str,
     assistant_text: str = "",
@@ -402,7 +426,8 @@ def process_turn(
     return inserted
 
 
-# ── Stats ────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Stats ─────────────────────────────────────────────────────────────────────────
 def stats(db_path: Optional[Path] = None) -> dict:
     con = _get_con(db_path)
     counts = {}
@@ -419,7 +444,8 @@ def stats(db_path: Optional[Path] = None) -> dict:
     }
 
 
-# ── Self-test ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-test ─────────────────────────────────────────────────────────────────────
 def _self_test():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
@@ -465,6 +491,7 @@ def _self_test():
         print("\n=== process_turn ===")
         ids = process_turn("I am learning Rust", "That's great, Rust is excellent for systems programming.", db)
         print(f"Inserted from turn: {ids}")
+
         print("\n=== closing db ===")
         close_db(db)
         print("\n=== All tests passed ===")
