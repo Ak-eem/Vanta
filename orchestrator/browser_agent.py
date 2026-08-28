@@ -9,9 +9,15 @@ Features:
 - Headless=False so users can log in manually on first run
 """
 
-import asyncio, time, json
+import asyncio
+import json
+import os
+import stat
+import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 try:
     from playwright.async_api import async_playwright, Page, Browser, BrowserContext
@@ -30,11 +36,100 @@ except ImportError:
 from .model_router import get_model_info, is_rate_limited
 
 SESSION_DIR = Path.home() / ".vanta" / "sessions"
-SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+# These are the exact HTTPS hosts configured in orchestrator/model_router.py.
+# Keep this list explicit: model-selected URLs must never be able to choose an
+# arbitrary destination while an authenticated browser context is active.
+MODEL_HOST_ALLOWLIST = frozenset({
+    "claude.ai",
+    "chatgpt.com",
+    "gemini.google.com",
+    "chat.deepseek.com",
+    "www.perplexity.ai",
+})
+
+
+def _ensure_secure_session_dir() -> bool:
+    """Create the session directory safely and require mode 0700."""
+    try:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory_stat = SESSION_DIR.stat()
+    except OSError as exc:
+        print(f"[BrowserAgent] Cannot access session directory safely: {exc}")
+        return False
+
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        print("[BrowserAgent] Session path is not a directory; skipping sessions.")
+        return False
+
+    mode = stat.S_IMODE(directory_stat.st_mode)
+    if mode != 0o700:
+        print(
+            "[BrowserAgent] Insecure session directory permissions "
+            f"({oct(mode)}; expected 0o700); skipping session access."
+        )
+        return False
+    return True
+
+
+def _secure_session_file(path: Path) -> bool:
+    """Require a regular, non-symlink session file with mode 0600."""
+    try:
+        file_stat = path.lstat()
+    except OSError as exc:
+        print(f"[BrowserAgent] Cannot inspect session file {path.name!r}: {exc}")
+        return False
+
+    mode = stat.S_IMODE(file_stat.st_mode)
+    if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+        print(
+            f"[BrowserAgent] Insecure session file {path.name!r} "
+            "(not a regular file); skipping load."
+        )
+        return False
+    if mode != 0o600:
+        print(
+            f"[BrowserAgent] Insecure session file permissions for {path.name!r} "
+            f"({oct(mode)}; expected 0o600); skipping load."
+        )
+        return False
+    return True
+
+
+def _safe_model_url(url: object, model_key: str) -> Optional[str]:
+    """Return a model URL only when it is HTTPS and on the explicit allowlist."""
+    reason = "invalid URL"
+    try:
+        parsed = urlparse(url) if isinstance(url, str) else None
+        if parsed is None:
+            raise ValueError("URL is not a string")
+        host = parsed.hostname
+        normalized_host = host.rstrip(".").lower() if host else ""
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        reason = str(exc)
+    else:
+        if parsed.scheme.lower() != "https":
+            reason = "URL scheme is not HTTPS"
+        elif normalized_host not in MODEL_HOST_ALLOWLIST:
+            reason = "URL host is not allowlisted"
+        elif parsed.username is not None or parsed.password is not None:
+            reason = "URL contains credentials"
+        elif port not in (None, 443):
+            reason = "URL uses a non-HTTPS port"
+        else:
+            return url
+
+    print(
+        f"[BrowserAgent] Blocked model navigation for {model_key!r}: {reason}. "
+        "Authenticated session state will not be used."
+    )
+    return None
+
 
 RESPONSE_POLL_INTERVAL = 0.8  # seconds between checks
-RESPONSE_TIMEOUT       = 120  # max seconds to wait for response
-TYPING_DELAY           = 40   # ms between keystrokes (humanlike)
+RESPONSE_TIMEOUT      = 120  # max seconds to wait for response
+TYPING_DELAY          = 40   # ms between keystrokes (humanlike)
 
 
 class BrowserAgent:
@@ -49,9 +144,10 @@ class BrowserAgent:
         self._playwright = None
         self._browser:  Optional[Browser]  = None
         self._contexts: dict[str, BrowserContext] = {}  # model_key → context
-        self._pages:    dict[str, Page]            = {}  # model_key → page
+        self._pages:    dict[str, Page]             = {} # model_key → page
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+
     async def start(self):
         """Launch the browser (headed so user can log in)."""
         self._playwright = await async_playwright().start()
@@ -67,25 +163,60 @@ class BrowserAgent:
         if self._playwright:
             await self._playwright.stop()
 
-    # ── Session management ────────────────────────────────────────────────────
+    # ── Session management ───────────────────────────────────────────────────
+
     def _session_path(self, model_key: str) -> Path:
         return SESSION_DIR / f"{model_key}.json"
 
     async def _load_context(self, model_key: str) -> BrowserContext:
-        """Load saved session or create a fresh context."""
+        """Load a saved session only when its directory and file are restricted."""
         sp = self._session_path(model_key)
         if sp.exists():
+            if not _ensure_secure_session_dir() or not _secure_session_file(sp):
+                return await self._browser.new_context()
             try:
                 ctx = await self._browser.new_context(storage_state=str(sp))
                 print(f"[BrowserAgent] Loaded saved session for {model_key}")
                 return ctx
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[BrowserAgent] Could not load saved session for {model_key}: {exc}")
+        elif not _ensure_secure_session_dir():
+            return await self._browser.new_context()
         return await self._browser.new_context()
 
     async def _save_context(self, model_key: str, ctx: BrowserContext):
-        await ctx.storage_state(path=str(self._session_path(model_key)))
-        print(f"[BrowserAgent] Session saved for {model_key}")
+        """Atomically save a session using a temporary mode-0600 file."""
+        if not _ensure_secure_session_dir():
+            print(f"[BrowserAgent] Skipping session save for {model_key}: insecure session directory.")
+            return
+
+        target = self._session_path(model_key)
+        temp_fd = -1
+        temp_path: Optional[Path] = None
+        try:
+            temp_fd, temp_name = tempfile.mkstemp(
+                prefix=f".{target.name}.", suffix=".tmp", dir=str(SESSION_DIR)
+            )
+            temp_path = Path(temp_name)
+            os.fchmod(temp_fd, 0o600)
+            state = await ctx.storage_state()
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as session_file:
+                temp_fd = -1
+                json.dump(state, session_file)
+                session_file.flush()
+                os.fsync(session_file.fileno())
+            os.replace(temp_path, target)
+            os.chmod(target, 0o600)
+            print(f"[BrowserAgent] Session saved for {model_key}")
+        except Exception as exc:
+            if temp_fd != -1:
+                os.close(temp_fd)
+            if temp_path is not None:
+                try:
+                    temp_path.unlink()
+                except FileNotFoundError:
+                    pass
+            print(f"[BrowserAgent] Could not safely save session for {model_key}: {exc}")
 
     async def _get_page(self, model_key: str) -> Page:
         """Return existing page or open a new one for the model."""
@@ -95,12 +226,16 @@ class BrowserAgent:
                 return page
 
         info = get_model_info(model_key)
-        ctx  = await self._load_context(model_key)
+        model_url = _safe_model_url(info.get("url"), model_key)
+        if model_url is None:
+            raise ValueError(f"Blocked navigation for model {model_key!r}")
+
+        ctx = await self._load_context(model_key)
         self._contexts[model_key] = ctx
         page = await ctx.new_page()
         if STEALTH_OK:
             await stealth_async(page)
-        await page.goto(info["url"], wait_until="networkidle", timeout=30_000)
+        await page.goto(model_url, wait_until="networkidle", timeout=30_000)
         self._pages[model_key] = page
 
         # First-time login check
@@ -116,13 +251,14 @@ class BrowserAgent:
         login_signals = ["sign in", "log in", "create account", "continue with google"]
         content = (await page.content()).lower()
         if any(s in content for s in login_signals):
-            print(f"\n[BrowserAgent] ⚠  {info['name']} needs login.")
+            print(f"\n[BrowserAgent] 🔐  {info['name']} needs login.")
             print(f"  Please log in at: {info['url']}")
             print("  Press ENTER here once you are logged in...")
             await asyncio.get_event_loop().run_in_executor(None, input)
             await self._save_context(model_key, self._contexts[model_key])
 
     # ── Prompt submission ─────────────────────────────────────────────────────
+
     async def _type_message(self, page: Page, model_key: str, message: str):
         info  = get_model_info(model_key)
         await page.wait_for_selector(info["input_sel"], timeout=15_000)
@@ -141,16 +277,17 @@ class BrowserAgent:
         except Exception:
             await page.keyboard.press("Enter")
 
-    # ── Response extraction ───────────────────────────────────────────────────
+    # ── Response extraction ──────────────────────────────────────────────────
+
     async def _wait_for_response(self, page: Page, model_key: str) -> str:
         """
         Poll until the model's response stabilises (stops changing).
         Returns the final text of the last assistant message.
         """
-        info     = get_model_info(model_key)
-        sel      = info["response_sel"]
-        deadline = time.time() + RESPONSE_TIMEOUT
-        last_txt = ""
+        info      = get_model_info(model_key)
+        sel       = info["response_sel"]
+        deadline  = time.time() + RESPONSE_TIMEOUT
+        last_txt  = ""
         stable_count = 0
 
         while time.time() < deadline:
@@ -183,6 +320,7 @@ class BrowserAgent:
         return last_txt or "[No response received — timeout]"
 
     # ── Public API ────────────────────────────────────────────────────────────
+
     async def send(self, model_key: str, prompt: str,
                    on_progress: Optional[Callable] = None) -> str:
         """
@@ -262,8 +400,8 @@ class BrowserAgent:
             page = self._pages.get(model_key)
             if not page or page.is_closed():
                 return ""
-            info     = get_model_info(model_key)
-            elements = await page.query_selector_all(info["response_sel"])
+            info      = get_model_info(model_key)
+            elements  = await page.query_selector_all(info["response_sel"])
             if elements:
                 return (await elements[-1].inner_text()).strip()
         except Exception:
@@ -273,9 +411,12 @@ class BrowserAgent:
     async def open_new_chat(self, model_key: str):
         """Navigate to a fresh conversation."""
         info = get_model_info(model_key)
+        model_url = _safe_model_url(info.get("url"), model_key)
+        if model_url is None:
+            return
         page = self._pages.get(model_key)
         if page and not page.is_closed():
-            await page.goto(info["url"], wait_until="networkidle", timeout=20_000)
+            await page.goto(model_url, wait_until="networkidle", timeout=20_000)
 
 
 class RateLimitError(Exception):
@@ -283,6 +424,7 @@ class RateLimitError(Exception):
 
 
 # ── Synchronous wrapper ───────────────────────────────────────────────────────
+
 class BrowserAgentSync:
     """Thread-safe sync wrapper for use from Flask/SocketIO handlers."""
 
