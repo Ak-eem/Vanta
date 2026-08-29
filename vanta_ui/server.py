@@ -590,12 +590,23 @@ def stream_response(sid: str, messages: list, mode: str,
     params = dict(
         model=model or MODEL,
         messages=messages,
-        # Groq's actual ceiling for both gpt-oss models is 65,536 output
-        # tokens. This is a CAP, not a target — it only limits how long a
-        # reply is *allowed* to be; the model still stops on its own once
-        # it's done, so this doesn't make short replies longer, it just
-        # removes truncation as a failure mode.
-        max_tokens=65536,
+        # NOT the 65,536 max-output ceiling — that's a different, much
+        # higher number than what actually matters here. Groq's FREE tier
+        # caps gpt-oss-120b AND gpt-oss-20b at 8,000 tokens PER MINUTE
+        # (TPM), and that budget counts the *requested* max_tokens, not
+        # just what's actually generated. Setting this to 65536 meant
+        # every single request — even "hi" — demanded ~66k tokens against
+        # an 8k ceiling and got rejected outright (413, tokens per minute).
+        # 3500 leaves real headroom for prompt + history + RAG content
+        # while still being ~3x the original 1200 that caused the
+        # truncation complaint in the first place. On the free tier there
+        # isn't a static number that's simultaneously "large" and "always
+        # safe" — 8000 TPM is a hard ceiling per model. The durable fix for
+        # wanting longer output than this budget allows is the
+        # continuation/chaining approach discussed earlier (several
+        # smaller requests instead of one large one), or Groq's paid
+        # Developer tier (250,000 TPM — 30x this).
+        max_tokens=4000 if mode == "CODE" else 2000,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
         include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
@@ -630,7 +641,18 @@ def stream_response(sid: str, messages: list, mode: str,
             room=sid)
     except Exception as e:
         print(f"🔴 stream_response exception: {type(e).__name__}: {e}")
-        socketio.emit("error", {"message": str(e)}, room=sid)
+        # Rate-limit hits (429, or Groq's 413-with-rate_limit_exceeded-code
+        # for oversized requests) were previously shown as the raw API
+        # exception string — accurate, but not something you should have
+        # to parse mid-conversation. Give this one case a clear message.
+        err_str = str(e)
+        if "rate_limit_exceeded" in err_str or getattr(e, "status_code", None) in (413, 429):
+            socketio.emit("error", {"message":
+                f"Hit Groq's per-minute limit for {params['model']} on the free tier. "
+                "Wait about a minute and try again, or send a shorter message."},
+                room=sid)
+        else:
+            socketio.emit("error", {"message": err_str}, room=sid)
     print(f"🟢 stream_response done, full length={len(full)}")
     return full
 
@@ -659,7 +681,7 @@ def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None
     """Non-streaming single call (used for critique pass)."""
     params = dict(
         model=model or MODEL, messages=messages,
-        max_tokens=max_tok or 65536,  # cap, not a target — see stream_response
+        max_tokens=max_tok or (4000 if mode == "CODE" else 2000),  # see stream_response — TPM, not the output ceiling
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
         include_reasoning=False,
     )
@@ -1162,7 +1184,28 @@ def handle_clear():
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", agent_name=AGENT, rag_ok=RAG_OK)
+    """Render the main UI page.
+
+    The template ``index.html`` expects a ``boot_status`` mapping that provides
+    initial status strings for the UI, core, knowledge, and voice subsystems.
+    Previously the route did not supply this variable, causing a Jinja
+    ``UndefinedError`` when accessing ``boot_status.*`` and resulting in a
+    500 Internal Server Error on ``/``.  We now pass a default status dict with
+    ``UNAVAILABLE`` values for each component, which the client‑side JavaScript
+    interprets as the default (and later updates the UI module to ``READY``).
+    """
+    boot_status = {
+        "ui": "UNAVAILABLE",
+        "core": "UNAVAILABLE",
+        "knowledge": "UNAVAILABLE",
+        "voice": "UNAVAILABLE",
+    }
+    return render_template(
+        "index.html",
+        agent_name=AGENT,
+        rag_ok=RAG_OK,
+        boot_status=boot_status,
+    )
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
