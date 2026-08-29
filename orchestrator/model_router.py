@@ -92,15 +92,15 @@ PRIORITIES: dict[str, list[str]] = {
 
 # Free OpenRouter models used for default subtask execution.
 FREE_MODEL_PRIORITIES: dict[str, list[str]] = {
-    "security": ["nvidia/nemotron-3-ultra-550b-a5b:free", "z-ai/glm-5.2:free"],
-    "database": ["nvidia/nemotron-3-ultra-550b-a5b:free", "nvidia/nemotron-3-super-120b-a12b:free"],
+    "security": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
+    "database": ["nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-super-120b-a12b:free"],
     "backend": ["z-ai/glm-5.2:free", "nvidia/nemotron-3-super-120b-a12b:free"],
-    "devops": ["nvidia/nemotron-3-ultra-550b-a5b:free", "z-ai/glm-5.2:free"],
+    "devops": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
     "code": ["z-ai/glm-5.2:free", "nvidia/nemotron-3-super-120b-a12b:free"],
-    "research": ["nvidia/nemotron-3-ultra-550b-a5b:free", "z-ai/glm-5.2:free"],
+    "research": ["nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.2:free"],
     "ui": ["google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3.5-lightning:free"],
     "auth": ["nvidia/nemotron-3-super-120b-a12b:free", "z-ai/glm-5.2:free"],
-    "other": ["google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3-ultra-550b-a5b:free"],
+    "other": ["google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3-ultra-550b-a55b:free"],
 }
 
 # Vision-capable OpenRouter models used for visual UI critique.

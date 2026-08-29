@@ -8,6 +8,7 @@ VANTA Server v4 — Natural Intelligence Mode
 
 import os, re, sys, time, json, subprocess, tempfile, uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, request, jsonify
@@ -16,6 +17,13 @@ from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.commands import parse_run_command  # re-added — this got dropped
+                                               # from the imports somewhere
+                                               # along the way, which is what
+                                               # silently reverted both
+                                               # call sites below back to
+                                               # shell=True. The function
+                                               # itself was untouched.
 
 try:
     from .checklist import (CHECKLIST_SYSTEM, LEGAL_DRAFT_SYSTEM,
@@ -100,7 +108,7 @@ if MEMORY_OK:
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "vanta-v4")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"], async_mode="threading")
 
 conversations: dict[str, list] = {}
 awake_sessions: dict[str, bool] = {}
@@ -113,13 +121,22 @@ WAKE_PATTERN = re.compile(rf"^\s*(hey[,\s]+)?{re.escape(AGENT)}\b[,:\s]*", re.IG
 # It never reveals the retrieval pipeline to the user.
 # ─────────────────────────────────────────────────────────────────────────────
 def _persona_header(effort: str) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
+    # Was datetime.now() — the server's own clock, wherever the process
+    # happens to run, with no timezone info at all. Vanta had no way to
+    # answer "what time is it" correctly and no explicit time tool to fall
+    # back on. VANTA_TZ defaults to Lagos based on context so far; override
+    # it directly if that's ever wrong.
+    tz = ZoneInfo(os.environ.get("VANTA_TZ", "Africa/Lagos"))
+    now_local = datetime.now(tz)
+    today = now_local.strftime("%Y-%m-%d")
+    current_time = now_local.strftime("%H:%M %Z")
     return f"""You are {AGENT}, {USER}'s household AI. Carry yourself as an
 exceptional butler would — not a chatbot, not a hype-man, not an assistant
 performing helpfulness. The standard is quiet, total competence.
 
 Knowledge cutoff: June 2024
 Current date: {today}
+Current time: {current_time}
 Reasoning: {effort}
 
 Personality: Composed and economical. You anticipate what {USER} needs and
@@ -443,13 +460,42 @@ def get_weather(msg: str) -> str:
         print(f"⚠️  Weather fetch failed for {city!r}: {e}")
         return ""
 
+DEFAULT_CITY = os.environ.get("VANTA_DEFAULT_CITY", "Lagos")
+
+def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
+    """Structured weather for the presence-screen card. That card was
+    hardcoded to 31°C / CLOUDY / RAIN 9PM permanently — this is the real
+    fix, not a prose string like get_weather() returns for chat. Returns
+    None on any failure so the frontend can show 'unavailable' honestly
+    rather than display stale fake numbers."""
+    if not WEATHER_API_KEY:
+        return None
+    try:
+        url = ("https://api.openweathermap.org/data/2.5/weather?"
+               + _urlparse.urlencode({"q": city, "appid": WEATHER_API_KEY, "units": "metric"}))
+        with _urlreq.urlopen(url, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("cod") != 200:
+            return None
+        return {
+            "temp": round(data["main"]["temp"]),
+            "condition": data["weather"][0]["main"].upper(),
+            "city": city,
+        }
+    except Exception as e:
+        print(f"⚠️  Weather card fetch failed for {city!r}: {e}")
+        return None
+
 def needs_live_knowledge(msg: str) -> bool:
     """Decide if this query benefits from a Google search — deliberately
     biased toward searching, since Vanta's June 2024 cutoff means anything
     genuinely current is a real gap, not just a nice-to-have check."""
     signals = {
         "what is","who is","how does","latest","best","current","recent",
-        "today","news","2024","2025","2026","price","when","where","why",
+        "today","news","2024","2025","2026","price","when","where",
+        # "why" removed — it matched pure reasoning/opinion questions with no
+        # actual lookup need (e.g. "why does a ball bounce") and sent them on
+        # unnecessary search detours. Flagged from real use, 2026-08-29.
         "compare","vs","difference","explain","define","recommend",
         "should i","how to","tutorial","example","stats","statistics",
         # Current-status phrasing — these age fastest and the old list missed them
@@ -461,18 +507,22 @@ def needs_live_knowledge(msg: str) -> bool:
     return any(s in lower for s in signals)
 
 def pick_reasoning_effort(mode: str, is_ui: bool, needs_knowledge: bool,
-                           think_mode: bool) -> str:
+                           think_mode: bool, has_history: bool = False) -> str:
     """Task type -> reasoning depth, so simple chat stays fast and only
     genuinely complex work spends the extra reasoning time.
-    low    -> plain conversational chat, no research signal
-    medium -> chat that needed a live search, or a plain (non-UI) code task
+    low    -> plain conversational chat, no research signal, AND the first
+              message of a fresh session (nothing yet to stay consistent with)
+    medium -> chat that needed a live search, a plain (non-UI) code task, OR
+              any message once the session has real history — once there's
+              prior context to be consistent with, always use at least the
+              smart model (see: trolley-problem self-contradiction, 8/25)
     high   -> explicit thinking-mode toggle, or the multi-pass UI critique
               loop (the most demanding, longest task currently in the app —
               this is also where a future 'learn a domain' mode would land)
     """
     if think_mode or is_ui:
         return "high"
-    if needs_knowledge or mode == "CODE":
+    if needs_knowledge or mode == "CODE" or has_history:
         return "medium"
     return "low"
 
@@ -540,7 +590,12 @@ def stream_response(sid: str, messages: list, mode: str,
     params = dict(
         model=model or MODEL,
         messages=messages,
-        max_tokens=4096 if mode == "CODE" else 1200,
+        # Groq's actual ceiling for both gpt-oss models is 65,536 output
+        # tokens. This is a CAP, not a target — it only limits how long a
+        # reply is *allowed* to be; the model still stops on its own once
+        # it's done, so this doesn't make short replies longer, it just
+        # removes truncation as a failure mode.
+        max_tokens=65536,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
         include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
@@ -604,7 +659,7 @@ def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None
     """Non-streaming single call (used for critique pass)."""
     params = dict(
         model=model or MODEL, messages=messages,
-        max_tokens=max_tok or (4096 if mode == "CODE" else 1200),
+        max_tokens=max_tok or 65536,  # cap, not a target — see stream_response
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
         include_reasoning=False,
     )
@@ -713,13 +768,20 @@ def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: boo
         except Exception:
             pass
 
+    return safe_filenames
+
 def parse_file(text: str, sid: str) -> dict:
     """Backward-compatible wrapper — parses AND writes straight to the real
-    workspace, same as before. Existing call sites keep working unchanged."""
+    workspace, same as before. Existing call sites keep working unchanged.
+
+    filenames on the returned dict reflects what write_and_open actually
+    wrote, not just what the model asked for — otherwise a path-traversal
+    attempt that gets silently blocked there would still get reported to
+    the workspace panel as if it had saved successfully."""
     parsed = parse_code_blocks(text)
     if not parsed["saved"]:
         return parsed
-    write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
+    parsed["filenames"] = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
     return parsed
 
 # ── Staging: test before publishing ─────────────────────────────────────
@@ -742,10 +804,14 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
     log = []
     for attempt in range(1, max_attempts + 1):
         try:
+            argv = parse_run_command(run_cmd)
             result = subprocess.run(
-                run_cmd, shell=True, cwd=str(STAGING_DIR),
+                argv, shell=False, cwd=str(STAGING_DIR),
                 capture_output=True, text=True, timeout=30,
             )
+        except ValueError as exc:
+            return {"success": False, "attempts": attempt,
+                    "error": f"Unsafe RUN command rejected: {exc}"}
         except subprocess.TimeoutExpired:
             # Long-running process (a server, a bot) — can't wait it out,
             # treat as a pass and let the real run happen in the workspace
@@ -789,8 +855,9 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
 def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
     for attempt in range(retries):
         try:
+            argv = parse_run_command(cmd)
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True,
+                argv, shell=False, capture_output=True,
                 text=True, timeout=30, cwd=WORKSPACE,
             )
             if proc.returncode == 0:
@@ -809,6 +876,8 @@ def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
                 return f"⚠ Failed after {retries} attempts:\n{proc.stderr[:500]}"
         except subprocess.TimeoutExpired:
             return "⚠ Timed out."
+        except ValueError as exc:
+            return f"⚠ Unsafe RUN command rejected: {exc}"
     return "⚠ All retries exhausted."
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -855,6 +924,12 @@ def on_connect():
     awake_sessions[request.sid] = True
     emit("status",    {"state": "idle"})
     emit("workspace", {"path": WORKSPACE})
+    sid = request.sid
+    def _send_weather():
+        card = get_weather_card()
+        if card:
+            socketio.emit("weather_card", card, room=sid)
+    socketio.start_background_task(_send_weather)
 
 @socketio.on("disconnect")
 def on_disconnect():
@@ -922,7 +997,14 @@ def handle_chat(data):
             google_f = ex.submit(get_google, msg) if (GOOGLE_OK and needs_knowledge) else None
 
         mode      = mode_f.result()
-        rag_ctx   = rag_f.result()
+        # 15s cap — an unbounded .result() means a hung RAG lookup (e.g.
+        # stuck file I/O) would silently stall the entire reply forever
+        # with no error shown. Falls back to no RAG context, same as an
+        # exception inside get_rag() already does.
+        try:
+            rag_ctx = rag_f.result(timeout=15)
+        except Exception:
+            rag_ctx = ""
         weather_ctx = weather_f.result() if weather_f else ""
         google_ctx = google_f.result() if google_f else ""
         # If weather lookup came up empty (no key, city not found), fall back
@@ -932,7 +1014,8 @@ def handle_chat(data):
 
     is_ui = mode == "CODE" and is_ui_task(msg)
     socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)
-    effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode)
+    has_history = bool(conversations.get(sid))
+    effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode, has_history)
     routed_model = pick_model(effort)
     messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
 
@@ -981,6 +1064,16 @@ def handle_chat(data):
 
     # Run generated code if applicable
     info = parse_file(final, sid)
+    if info.get("saved"):
+        # Structured, per-file payload for the workspace panel — separate
+        # from the raw token stream sent during generation above, which has
+        # no file boundaries. filenames here is the write_and_open-filtered
+        # list, so this only ever names files that actually made it to disk.
+        socketio.emit("workspace_files", {
+            "filenames": info["filenames"],
+            "codes": info["codes"],
+            "run_cmd": info.get("run_cmd"),
+        }, room=sid)
     if info.get("run_cmd"):
         socketio.emit("status", {"state": "thinking",
             "message": f"Running: {info['run_cmd'][:80]}…"}, room=sid)

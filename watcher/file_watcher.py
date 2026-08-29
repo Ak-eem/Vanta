@@ -20,11 +20,26 @@ ALLOWED_TEST_EXECUTABLES = {"python", "python3", "pytest", "node", "npm"}
 
 class _DebouncedHandler(FileSystemEventHandler):
     """Watchdog fires multiple events per save on some editors/OSes —
-    this collapses repeats within a short window."""
+    this collapses repeats within a short window.
 
-    def __init__(self, debounce_seconds: float = 3):
+    on_modified used to end here with no alert ever firing — the callback
+    wasn't even wired to the constructor (FileWatcher.start() built this
+    with zero args), so there was no path from a file change to on_alert
+    regardless of what the body did. Fixed to actually connect the two,
+    and to alert on real signal (a burst of rapid saves to one file within
+    a short window) rather than every single save, which would be noise —
+    that part of the original design comment was right."""
+
+    def __init__(self, on_alert, source: str, debounce_seconds: float = 3,
+                 burst_threshold: int = 15, burst_window_seconds: float = 600):
         self.debounce_seconds = debounce_seconds
+        self.on_alert = on_alert
+        self.source = source
+        self.burst_threshold = burst_threshold
+        self.burst_window_seconds = burst_window_seconds
         self._last_fired: dict[str, float] = {}
+        self._burst_start: dict[str, float] = {}
+        self._burst_count: dict[str, int] = {}
 
     def on_modified(self, event):
         if event.is_directory:
@@ -33,8 +48,25 @@ class _DebouncedHandler(FileSystemEventHandler):
         if now - self._last_fired.get(event.src_path, 0) < self.debounce_seconds:
             return
         self._last_fired[event.src_path] = now
-        # Reserved hook — a single save isn't alert-worthy on its own,
-        # but this is where a future quick-lint-on-save could plug in.
+
+        window_start = self._burst_start.get(event.src_path)
+        if window_start is None or now - window_start > self.burst_window_seconds:
+            self._burst_start[event.src_path] = now
+            self._burst_count[event.src_path] = 1
+            return
+
+        self._burst_count[event.src_path] = self._burst_count.get(event.src_path, 0) + 1
+        if self._burst_count[event.src_path] == self.burst_threshold:
+            self.on_alert(
+                "low", "High save frequency",
+                f"{Path(event.src_path).name}: {self.burst_threshold}+ saves in "
+                f"{int(self.burst_window_seconds / 60)} min — worth a look if unintentional",
+                source=self.source,
+            )
+            # Reset so it can fire again on a later burst instead of going
+            # silent for the rest of the window once past the threshold.
+            self._burst_start[event.src_path] = now
+            self._burst_count[event.src_path] = 0
 
 
 class FileWatcher:
@@ -51,7 +83,10 @@ class FileWatcher:
 
     def start(self):
         for proj in self.projects:
-            self._observer.schedule(_DebouncedHandler(), proj["path"], recursive=True)
+            self._observer.schedule(
+                _DebouncedHandler(self.on_alert, source=proj["path"]),
+                proj["path"], recursive=True,
+            )
         if self.projects:
             self._observer.start()
         threading.Thread(target=self._git_loop, daemon=True).start()
