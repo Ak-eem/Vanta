@@ -4,22 +4,19 @@ import shlex
 
 
 def parse_run_command(cmd: str) -> list[str]:
-    """Parse a RUN command without allowing shell control syntax."""
+    """Parse a RUN command safely for shell=False subprocess execution."""
     if not cmd or not cmd.strip():
         raise ValueError("RUN is empty")
-    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=";|&<>`\n")
-    lexer.whitespace = " \t\r"
     try:
-        tokens = list(lexer)
+        tokens = shlex.split(cmd)
     except ValueError as exc:
         raise ValueError(f"malformed RUN quoting: {exc}") from exc
-    punctuation = set(lexer.punctuation_chars) | {"\n"}
-    if any(token and all(char in punctuation for char in token) for token in tokens):
+    if not tokens:
+        raise ValueError("RUN is empty")
+    forbidden = {";", "&&", "||", "|", "&", "`"}
+    if any(t in forbidden for t in tokens):
         raise ValueError(
             "RUN command contains shell chaining; use one executable and "
-            "arguments without ;, |, &, <, >, `, or newlines."
+            "arguments without ;, |, &, ||, &&, `, or newlines."
         )
-    try:
-        return shlex.split(cmd)
-    except ValueError as exc:
-        raise ValueError(f"malformed RUN quoting: {exc}") from exc
+    return tokens

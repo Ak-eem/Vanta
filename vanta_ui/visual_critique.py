@@ -20,8 +20,13 @@ import os
 import time
 from pathlib import Path
 
-from orchestrator.model_router import VISION_MODEL_PRIORITIES
-from orchestrator.openrouter_router import OpenRouterClient, OpenRouterError
+try:
+    from orchestrator.model_router import VISION_MODEL_PRIORITIES
+    from orchestrator.openrouter_router import OpenRouterClient, OpenRouterError
+except ImportError:
+    VISION_MODEL_PRIORITIES = {}
+    OpenRouterClient = None
+    OpenRouterError = Exception
 
 
 VISION_MODEL = "qwen/qwen3.6-27b"
@@ -131,11 +136,12 @@ def run_visual_critique(groq_client, file_path: str):
         return None
 
     try:
-        openrouter_client = OpenRouterClient.from_env()
-        if openrouter_client is not None:
-            return _critique_screenshots_openrouter(
-                openrouter_client, shots[0], shots[1]
-            )
+        if OpenRouterClient is not None:
+            openrouter_client = OpenRouterClient.from_env()
+            if openrouter_client is not None:
+                return _critique_screenshots_openrouter(
+                    openrouter_client, shots[0], shots[1]
+                )
     except Exception as e:
         print(f"[Visual critique] OpenRouter failed, falling back to Groq: {e}")
 

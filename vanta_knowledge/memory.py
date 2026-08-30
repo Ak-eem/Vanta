@@ -78,11 +78,15 @@ class _Conn:
     def __enter__(self) -> sqlite3.Connection:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self._path), timeout=10)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.execute("PRAGMA foreign_keys=ON;")
-        _ensure_schema(self.conn)
-        return self.conn
+        try:
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode=WAL;")
+            self.conn.execute("PRAGMA foreign_keys=ON;")
+            _ensure_schema(self.conn)
+            return self.conn
+        except Exception:
+            self.conn.close()
+            raise
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         if exc_type is None:

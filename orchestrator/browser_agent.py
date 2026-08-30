@@ -118,8 +118,15 @@ class BrowserAgent:
         if any(s in content for s in login_signals):
             print(f"\n[BrowserAgent] ⚠  {info['name']} needs login.")
             print(f"  Please log in at: {info['url']}")
-            print("  Press ENTER here once you are logged in...")
-            await asyncio.get_event_loop().run_in_executor(None, input)
+            try:
+                import sys
+                if sys.stdin and sys.stdin.isatty():
+                    print("  Press ENTER here once you are logged in...")
+                    await asyncio.get_event_loop().run_in_executor(None, input)
+                else:
+                    await page.wait_for_selector(info["input_sel"], timeout=60_000)
+            except Exception:
+                pass
             await self._save_context(model_key, self._contexts[model_key])
 
     # ── Prompt submission ─────────────────────────────────────────────────────
@@ -129,7 +136,9 @@ class BrowserAgent:
         el    = await page.query_selector(info["input_sel"])
         await el.click()
         # Clear existing content
-        await page.keyboard.press("Control+A")
+        import sys
+        mod = "Meta+A" if sys.platform == "darwin" else "Control+A"
+        await page.keyboard.press(mod)
         await page.keyboard.press("Delete")
         await el.type(message, delay=TYPING_DELAY)
 
@@ -162,9 +171,10 @@ class BrowserAgent:
                 last_el  = elements[-1]
                 txt      = (await last_el.inner_text()).strip()
 
-                # Check for rate limit in the page
+                # Check for rate limit outside the model's own response
                 page_txt = await page.inner_text("body")
-                if is_rate_limited(page_txt, model_key):
+                page_txt_clean = page_txt.replace(txt, "") if (txt and txt in page_txt) else page_txt
+                if is_rate_limited(page_txt_clean, model_key):
                     raise RateLimitError(f"{model_key} is rate limited")
 
                 if txt == last_txt and txt:

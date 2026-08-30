@@ -23,6 +23,9 @@ from .model_router import FREE_MODEL_PRIORITIES
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLASH_MODEL = "google/gemini-2.0-flash-exp:free"
+# NOTE: The correct model identifier for Nemotron 3 Ultra 550B is "a5b", not "a55b".
+# The typo prevented the intended model from being selected, silently falling
+# back to the brain fallback model and causing mis‑routing of tasks.
 DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a5b:free"
 DEFAULT_BRAIN_FALLBACK_MODEL = "z-ai/glm-5.2:free"
 

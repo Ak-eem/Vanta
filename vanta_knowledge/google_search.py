@@ -30,18 +30,22 @@ def _init_db():
 
 def _cache_get(key: str) -> Optional[str]:
     con = _init_db()
-    row = con.execute("SELECT result, ts FROM cache WHERE key=?", (key,)).fetchone()
-    con.close()
-    if row and (time.time() - row[1]) < CACHE_TTL:
-        return row[0]
-    return None
+    try:
+        row = con.execute("SELECT result, ts FROM cache WHERE key=?", (key,)).fetchone()
+        if row and (time.time() - row[1]) < CACHE_TTL:
+            return row[0]
+        return None
+    finally:
+        con.close()
 
 def _cache_set(key: str, value: str):
     con = _init_db()
-    con.execute("INSERT OR REPLACE INTO cache(key,result,ts) VALUES(?,?,?)",
-                (key, value, time.time()))
-    con.commit()
-    con.close()
+    try:
+        con.execute("INSERT OR REPLACE INTO cache(key,result,ts) VALUES(?,?,?)",
+                    (key, value, time.time()))
+        con.commit()
+    finally:
+        con.close()
 
 def _cache_key(query: str) -> str:
     return hashlib.md5(query.lower().strip().encode()).hexdigest()
@@ -134,7 +138,22 @@ def google_search_context(query: str, use_cache: bool = True) -> str:
             return cached
 
     print(f"[Google] Searching: {query[:60]}")
-    results = asyncio.run(_search_async(query))
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                results = pool.submit(asyncio.run, _search_async(query)).result(timeout=10)
+        else:
+            results = asyncio.run(_search_async(query))
+    except Exception as e:
+        print(f"[Google] Search failed or timed out: {e}")
+        results = []
+
     context = _format_results(query, results)
 
     if context and use_cache:

@@ -22,7 +22,6 @@ _CACHE_LOCK = threading.RLock()
 _CACHED_CHUNKS = None
 _CACHED_SIGNATURE = None
 _CACHE_UNAVAILABLE = False
-_SCAN_UNAVAILABLE = False
 
 
 def chunk_markdown(text: str, chunk_size: int = 600) -> list:
@@ -47,13 +46,12 @@ def chunk_markdown(text: str, chunk_size: int = 600) -> list:
     return chunks
 
 
-def _knowledge_files() -> list:
-    """Return safe, bounded markdown files beneath KNOWLEDGE_DIR."""
-    global _SCAN_UNAVAILABLE
-    _SCAN_UNAVAILABLE = False
+def _knowledge_files() -> tuple[list, bool]:
+    """Return safe, bounded markdown files beneath KNOWLEDGE_DIR and scan failure flag."""
     knowledge_root = KNOWLEDGE_DIR.resolve()
     files = []
     scanned = 0
+    scan_failed = False
 
     try:
         for filepath in KNOWLEDGE_DIR.rglob("*.md"):
@@ -104,15 +102,15 @@ def _knowledge_files() -> list:
             exc,
             exc_info=True,
         )
-        _SCAN_UNAVAILABLE = True
+        scan_failed = True
 
-    return files
+    return files, scan_failed
 
 
 def load_knowledge_base() -> list:
     global _CACHED_CHUNKS, _CACHED_SIGNATURE, _CACHE_UNAVAILABLE
-    files = _knowledge_files()
-    if _SCAN_UNAVAILABLE:
+    files, scan_failed = _knowledge_files()
+    if scan_failed:
         with _CACHE_LOCK:
             _CACHE_UNAVAILABLE = True
         return []

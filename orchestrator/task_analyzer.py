@@ -67,7 +67,7 @@ def analyze_task(task: str, groq_client, model: str) -> dict:
         )
         raw  = resp.choices[0].message.content.strip()
         # Strip markdown fences if present
-        raw  = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+        raw = re.sub(r"^```(?:json)?\s*(.*?)\s*```$", r"\1", raw, flags=re.DOTALL).strip()
         return json.loads(raw)
 
     except Exception as e:

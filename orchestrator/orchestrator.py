@@ -138,27 +138,33 @@ class VantaOrchestrator:
             def on_progress(step, model_name, status, result=None):
                 emit(step, model_name, status, result)
 
-            if agent is not None:
-                response, model_used = agent.send_with_failover(
-                    model_priority=model_list,
-                    prompt=prompt,
-                    on_progress=on_progress,
-                )
-            elif self.openrouter is not None:
-                response, model_used = self.openrouter.execute(
-                    prompt,
-                    task_type,
-                    on_progress=lambda model_name, status, result=None: emit(
-                        f"Sub-task: {task_type}", model_name, status, result
-                    ),
-                )
-            else:
-                emit(
-                    "OpenRouter is not configured; handling task locally",
-                    "Vanta",
-                    "error",
-                )
-                return self._local_fallback(task)
+            try:
+                if agent is not None:
+                    response, model_used = agent.send_with_failover(
+                        model_priority=model_list,
+                        prompt=prompt,
+                        on_progress=on_progress,
+                    )
+                elif self.openrouter is not None:
+                    response, model_used = self.openrouter.execute(
+                        prompt,
+                        task_type,
+                        on_progress=lambda model_name, status, result=None: emit(
+                            f"Sub-task: {task_type}", model_name, status, result
+                        ),
+                    )
+                else:
+                    emit(
+                        "OpenRouter is not configured; handling sub-task locally",
+                        "Vanta",
+                        "thinking",
+                    )
+                    response = self._local_fallback(prompt)
+                    model_used = self.model
+            except Exception as exc:
+                emit(f"Execution failed ({exc}); using local fallback", "Vanta", "thinking")
+                response = self._local_fallback(prompt)
+                model_used = f"local fallback ({self.model})"
 
             results.append(
                 {

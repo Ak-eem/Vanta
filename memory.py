@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS memory_audit (
 );
 
 -- FTS5 virtual table + triggers for sync
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(content, content_rowid=rowid);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(content, content='memory_entries', content_rowid='id');
 
 CREATE TRIGGER IF NOT EXISTS memory_entries_ai AFTER INSERT ON memory_entries BEGIN
     INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
@@ -186,7 +186,7 @@ def search_memories(query: str, top_k: int = 5, db_path: Optional[Path] = None) 
             """SELECT e.id, e.kind, e.content, e.source, e.confidence, e.created_at
                FROM memory_fts f
                JOIN memory_entries e ON f.rowid = e.id
-               WHERE memory_fts MATCH ?
+               WHERE memory_fts MATCH ? AND e.consolidated = 0
                ORDER BY rank
                LIMIT ?""",
             (query, top_k),
@@ -206,7 +206,7 @@ def search_memories(query: str, top_k: int = 5, db_path: Optional[Path] = None) 
         rows = con.execute(
             """SELECT id, kind, content, source, confidence, created_at
                FROM memory_entries
-               WHERE content LIKE ?
+               WHERE content LIKE ? AND consolidated = 0
                ORDER BY created_at DESC
                LIMIT ?""",
             (like_q, top_k),
@@ -252,7 +252,7 @@ def write_memory_md(path: Optional[Path] = None, db_path: Optional[Path] = None)
         rows = con.execute(
             """SELECT content, confidence, created_at
                FROM memory_entries
-               WHERE kind = ?
+               WHERE kind = ? AND consolidated = 0
                ORDER BY confidence DESC, created_at DESC""",
             (kind,),
         ).fetchall()

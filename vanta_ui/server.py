@@ -7,6 +7,19 @@ VANTA Server v4 — Natural Intelligence Mode
 """
 
 import os, re, sys, time, json, subprocess, tempfile, uuid
+
+# Ensure Windows stdout/stderr handles UTF-8 characters without charmap errors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -108,7 +121,8 @@ if MEMORY_OK:
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "vanta-v4")
-socketio = SocketIO(app, cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"], async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+_BACKGROUND_POOL = ThreadPoolExecutor(max_workers=6)
 
 conversations: dict[str, list] = {}
 awake_sessions: dict[str, bool] = {}
@@ -783,10 +797,15 @@ def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: boo
     if open_in_editor and safe_filenames:
         try:
             primary_path = target_dir / safe_filenames[0]
+            # Opening the file in VS Code should not invoke a shell. Using ``shell=True``
+            # opens a command interpreter which can be abused if ``primary_path`` were
+            # ever controlled by a malicious model output (e.g. ``code && rm -rf /``).
+            # ``subprocess.Popen`` with a list and ``shell=False`` safely executes the
+            # program directly, relying on the OS ``PATH`` to locate ``code``.
             if sys.platform == "win32":
-                subprocess.Popen(["code", str(primary_path)], shell=True)
+                subprocess.Popen(["code", str(primary_path)], shell=False)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-a", "Visual Studio Code", str(primary_path)])
+                subprocess.Popen(["open", "-a", "Visual Studio Code", str(primary_path)], shell=False)
         except Exception:
             pass
 
@@ -803,7 +822,13 @@ def parse_file(text: str, sid: str) -> dict:
     parsed = parse_code_blocks(text)
     if not parsed["saved"]:
         return parsed
-    parsed["filenames"] = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
+    safe_filenames = write_and_open(parsed["filenames"], parsed["codes"], WORKSPACE)
+    parsed["filenames"] = safe_filenames
+    if safe_filenames:
+        parsed["filename"] = safe_filenames[0]
+        parsed["saved"] = True
+    else:
+        parsed["saved"] = False
     return parsed
 
 # ── Staging: test before publishing ─────────────────────────────────────
@@ -867,10 +892,13 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
             return {"success": False, "attempts": attempt, "log": log}
 
         fixed = parse_code_blocks(fix_response)
-        if fixed["saved"]:
+        if fixed["saved"] and fixed.get("filenames"):
             filenames, codes = fixed["filenames"], fixed["codes"]
             run_cmd = fixed["run_cmd"] or run_cmd
             write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
+        else:
+            log.append({"attempt": attempt, "error": "LLM fix output was malformed or empty"})
+            return {"success": False, "attempts": attempt, "log": log, "last_error": "Fix output was malformed"}
 
     return {"success": False, "attempts": max_attempts, "log": log}
 
@@ -988,51 +1016,66 @@ def handle_chat(data):
 
     # ── Checklist follow-up intercept ───────────────────────────────────────
     if sid in checklist_pending:
-        pending = checklist_pending.pop(sid)
+        pending = checklist_pending[sid]
         stage = pending.get("stage", "build")
         if wants_legal_draft(msg) or (stage == "post_checklist" and wants_checklist(msg)):
+            checklist_pending.pop(sid, None)
             _run_legal_draft(sid, pending)
             return
         if stage == "build" and wants_checklist(msg):
+            checklist_pending.pop(sid, None)
             _run_checklist(sid, pending)
             return
         # Anything else — drop the pending offer, fall through to normal routing
+        checklist_pending.pop(sid, None)
 
     socketio.emit("status", {"state": "thinking"}, room=sid)
 
     # ── Parallel: classify + search simultaneously ─────────────────────────
-    # This is what makes it feel instant — search doesn't add sequential delay
+    # Non-blocking executor so hung lookups never stall the response
     needs_knowledge = needs_live_knowledge(msg)
     is_weather = needs_weather(msg)
     if needs_knowledge or is_weather:
         socketio.emit("status", {"state": "learning", "message": "Searching knowledge…"}, room=sid)
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        mode_f   = ex.submit(detect_mode, msg)
-        rag_f    = ex.submit(get_rag, msg)
-        # Weather takes the fast real-API path instead of the slow Playwright
-        # Google scrape — no reason to launch a browser for a temperature.
-        if is_weather:
-            weather_f = ex.submit(get_weather, msg)
-            google_f = None
-        else:
-            weather_f = None
-            google_f = ex.submit(get_google, msg) if (GOOGLE_OK and needs_knowledge) else None
 
-        mode      = mode_f.result()
-        # 15s cap — an unbounded .result() means a hung RAG lookup (e.g.
-        # stuck file I/O) would silently stall the entire reply forever
-        # with no error shown. Falls back to no RAG context, same as an
-        # exception inside get_rag() already does.
+    mode_f = _BACKGROUND_POOL.submit(detect_mode, msg)
+    rag_f = _BACKGROUND_POOL.submit(get_rag, msg)
+    if is_weather:
+        weather_f = _BACKGROUND_POOL.submit(get_weather, msg)
+        google_f = None
+    else:
+        weather_f = None
+        google_f = _BACKGROUND_POOL.submit(get_google, msg) if (GOOGLE_OK and needs_knowledge) else None
+
+    try:
+        mode = mode_f.result(timeout=2)
+    except Exception:
+        mode = "CHAT"
+
+    try:
+        rag_ctx = rag_f.result(timeout=3)
+    except Exception:
+        rag_ctx = ""
+
+    weather_ctx = ""
+    if weather_f:
         try:
-            rag_ctx = rag_f.result(timeout=15)
+            weather_ctx = weather_f.result(timeout=3)
         except Exception:
-            rag_ctx = ""
-        weather_ctx = weather_f.result() if weather_f else ""
-        google_ctx = google_f.result() if google_f else ""
-        # If weather lookup came up empty (no key, city not found), fall back
-        # to a regular search rather than silently answering with nothing extra
-        if is_weather and not weather_ctx and GOOGLE_OK:
+            weather_ctx = ""
+
+    google_ctx = ""
+    if google_f:
+        try:
+            google_ctx = google_f.result(timeout=4)
+        except Exception:
+            google_ctx = ""
+
+    if is_weather and not weather_ctx and GOOGLE_OK:
+        try:
             google_ctx = get_google(msg)
+        except Exception:
+            google_ctx = ""
 
     is_ui = mode == "CODE" and is_ui_task(msg)
     socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)

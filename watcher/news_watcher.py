@@ -26,20 +26,23 @@ class NewsWatcher:
         self.model = model
         self.on_alert = on_alert
         self.poll_minutes = poll_minutes
-        self._seen: set = self._load_seen()
+        self._seen: dict = self._load_seen()
         self._stop = threading.Event()
 
-    def _load_seen(self) -> set:
+    def _load_seen(self) -> dict:
         if SEEN_FILE.exists():
             try:
-                return set(json.loads(SEEN_FILE.read_text()))
+                items = json.loads(SEEN_FILE.read_text())
+                return {k: True for k in items}
             except Exception:
                 pass
-        return set()
+        return {}
 
     def _save_seen(self):
         try:
-            SEEN_FILE.write_text(json.dumps(list(self._seen)[-MAX_SEEN_HISTORY:]))
+            keys = list(self._seen.keys())[-MAX_SEEN_HISTORY:]
+            self._seen = {k: True for k in keys}
+            SEEN_FILE.write_text(json.dumps(keys))
         except Exception:
             pass
 
@@ -69,7 +72,7 @@ class NewsWatcher:
                 uid = entry.get("id") or entry.get("link")
                 if not uid or uid in self._seen:
                     continue
-                self._seen.add(uid)
+                self._seen[uid] = True
                 new_items.append({
                     "title": entry.get("title", ""),
                     "summary": entry.get("summary", "")[:300],
