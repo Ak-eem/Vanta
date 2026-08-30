@@ -1,25 +1,21 @@
-# VANTA v3 — Python dependencies
+# VANTA pinned dependency set
 # Install: pip install -r requirements.txt
 # Then:    playwright install chromium
 
 # ── Core ──────────────────────────────────────────────────────
-flask>=3.0.0
-flask-socketio>=5.3.6
-groq>=0.9.0
-python-dotenv>=1.0.0
+flask==3.1.1
+flask-socketio==5.5.1
+groq==0.18.0
+python-dotenv==1.1.1
 
 # ── Web automation (orchestrator + Google search) ─────────────
-playwright>=1.44.0
-playwright-stealth>=1.0.6
-
-# ── RAG (keyword-based, zero extra dependencies — nothing needed here) ──
+playwright==1.54.0
+playwright-stealth==1.0.6
 
 # ── Watcher daemon ────────────────────────────────────────────
-watchdog>=4.0.0
-feedparser>=6.0.0
+watchdog==6.0.0
+feedparser==6.0.0
 
 # ── Utilities ─────────────────────────────────────────────────
-# (eventlet removed — server.py runs SocketIO with async_mode="threading"
-# and eventlet was never imported anywhere; keeping it installed just
-# risks a future accidental monkey-patch conflicting with Playwright's
-# sync API)
+# eventlet is intentionally not included: server.py uses async_mode="threading"
+# and the project no longer depends on eventlet.

@@ -5,6 +5,7 @@ failures. Silent on success by design — it only speaks up when
 something actually needs attention.
 """
 
+import logging
 import shlex
 import subprocess
 import time
@@ -12,6 +13,8 @@ import threading
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+LOGGER = logging.getLogger(__name__)
 
 UNCOMMITTED_THRESHOLD_HOURS = 4
 GIT_CHECK_INTERVAL_SECONDS = 300  # 5 minutes
@@ -80,6 +83,7 @@ class FileWatcher:
         self._observer = Observer()
         self._uncommitted_since: dict[str, float] = {}
         self._stop = threading.Event()
+        self._alert_fingerprints: set[str] = set()
 
     def start(self):
         for proj in self.projects:
@@ -123,12 +127,16 @@ class FileWatcher:
 
         conflicts = [l for l in lines if l.startswith("UU")]
         if conflicts:
-            self.on_alert(
-                "high", "Merge conflict",
-                f"{len(conflicts)} file(s) unresolved in {Path(repo_path).name}",
-                source=repo_path,
-            )
+            fingerprint = f"merge_conflict:{repo_path}"
+            if fingerprint not in self._alert_fingerprints:
+                self._alert_fingerprints.add(fingerprint)
+                self.on_alert(
+                    "high", "Merge conflict",
+                    f"{len(conflicts)} file(s) unresolved in {Path(repo_path).name}",
+                    source=repo_path,
+                )
             return
+        self._alert_fingerprints.discard(f"merge_conflict:{repo_path}")
 
         first_seen = self._uncommitted_since.setdefault(repo_path, time.time())
         hours = (time.time() - first_seen) / 3600
@@ -197,6 +205,7 @@ class FileWatcher:
                 capture_output=True,
                 text=True,
                 timeout=120,
+                check=False,
             )
             if result.returncode != 0:
                 err = (result.stderr or result.stdout)[:200]
@@ -205,5 +214,5 @@ class FileWatcher:
         except subprocess.TimeoutExpired:
             self.on_alert("medium", "Test run timed out",
                           Path(project_path).name, source=project_path)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.exception("Test command failed for %s: %s", project_path, exc)

@@ -6,7 +6,7 @@ VANTA Server v4 — Natural Intelligence Mode
 - Parallel classify + search before LLM call to minimize latency
 """
 
-import os, re, sys, time, json, subprocess, tempfile, uuid
+import os, re, sys, time, json, subprocess, tempfile, uuid, shutil
 
 # Ensure Windows stdout/stderr handles UTF-8 characters without charmap errors
 if hasattr(sys.stdout, "reconfigure"):
@@ -96,14 +96,18 @@ def _load_workspace() -> str:
     'change folder' flow used elsewhere in the project stays in sync."""
     cfg = Path(__file__).parent.parent / "vanta_config.txt"
     if cfg.exists():
-        saved = cfg.read_text().strip()
-        if saved and Path(saved).is_dir():
-            return saved
-    return os.environ.get("VANTA_WORKSPACE", str(Path.home() / "vanta_workspace"))
+        saved = cfg.read_text(encoding="utf-8").strip()
+        if saved:
+            expanded = os.path.expanduser(os.path.expandvars(saved))
+            if Path(expanded).is_dir():
+                return expanded
+    env_path = os.environ.get("VANTA_WORKSPACE", str(Path.home() / "vanta_workspace"))
+    return os.path.expanduser(os.path.expandvars(env_path))
 
 WORKSPACE  = _load_workspace()
+WORKSPACE_ROOT = Path(WORKSPACE).resolve()
 MAX_HIST   = 14
-Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
+Path(WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
 
 client = Groq(api_key=GROQ_API_KEY)
 if ORCH_OK:
@@ -120,8 +124,20 @@ if MEMORY_OK:
 
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
-app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "vanta-v4")
-socketio = SocketIO(app, cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"], async_mode="threading")
+FLASK_SECRET = os.environ.get("FLASK_SECRET")
+if not FLASK_SECRET:
+    raise RuntimeError("FLASK_SECRET environment variable is required; set it in your environment or .env file.")
+app.config["SECRET_KEY"] = FLASK_SECRET
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+    ],
+    async_mode="threading",
+)
 _BACKGROUND_POOL = ThreadPoolExecutor(max_workers=6)
 
 conversations: dict[str, list] = {}
@@ -772,23 +788,36 @@ def parse_code_blocks(text: str) -> dict:
         "run_cmd": run.group(1).strip() if run else None,
     }
 
+def _is_safe_write_target(target_dir, filename: str) -> Path | None:
+    target_root = Path(target_dir).resolve()
+    raw_name = str(filename).strip()
+    if not raw_name or raw_name.startswith(("/", "\\")) or raw_name.startswith("~"):
+        return None
+    if ".." in Path(raw_name).parts:
+        return None
+    candidate = (target_root / raw_name).resolve(strict=False)
+    if not candidate.is_relative_to(target_root):
+        return None
+    if candidate.exists() and candidate.is_symlink():
+        return None
+    for parent in (candidate, *candidate.parents):
+        if parent == target_root:
+            break
+        if parent.exists() and parent.is_symlink():
+            return None
+    return candidate
+
+
 def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: bool = True):
     """The actual disk-write + VS Code side effects, separated out so
     staging can write to a temp dir silently, and only the real workspace
-    write triggers the editor to pop open.
-
-    Every filename is resolved and checked against target_dir before it
-    touches disk — pathlib silently discards target_dir if filename is
-    absolute (Path("/workspace") / "/etc/passwd" == Path("/etc/passwd")),
-    and a bare "../../.." would escape it too. A model output can't be
-    trusted to never produce either, so this is enforced here rather than
-    hoped for upstream."""
+    write triggers the editor to pop open."""
     target_dir = Path(target_dir).resolve()
     safe_filenames = []
     for filename in filenames:
-        candidate = (target_dir / filename).resolve()
-        if not candidate.is_relative_to(target_dir):
-            print(f"🔴 blocked write outside workspace: {filename!r} -> {candidate}")
+        candidate = _is_safe_write_target(target_dir, filename)
+        if candidate is None:
+            print(f"🔴 blocked write outside workspace: {filename!r}")
             continue
         safe_filenames.append(filename)
         candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -836,7 +865,6 @@ def parse_file(text: str, sid: str) -> dict:
 # a private temp directory first, iterate on failures there where nothing
 # is visible or "real" yet, and only copy the verified-working version into
 # the actual workspace once it actually runs clean.
-STAGING_DIR = Path(tempfile.gettempdir()) / "vanta_staging"
 
 def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: str,
                              max_attempts: int = 4) -> dict:
@@ -844,63 +872,60 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
     if not parsed["saved"]:
         return {"success": False, "reason": "no_code_found"}
 
-    STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix="vanta_staging_"))
     filenames, codes, run_cmd = parsed["filenames"], parsed["codes"], parsed["run_cmd"]
-    write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
+    try:
+        write_and_open(filenames, codes, staging_dir, open_in_editor=False)
+        log = []
+        for attempt in range(1, max_attempts + 1):
+            try:
+                argv = parse_run_command(run_cmd)
+                result = subprocess.run(
+                    argv, shell=False, cwd=str(staging_dir),
+                    capture_output=True, text=True, timeout=30,
+                )
+            except ValueError as exc:
+                return {"success": False, "attempts": attempt,
+                        "error": f"Unsafe RUN command rejected: {exc}"}
+            except subprocess.TimeoutExpired:
+                write_and_open(filenames, codes, WORKSPACE)
+                return {"success": True, "attempts": attempt, "note": "long_running",
+                        "filenames": filenames, "codes": codes, "run_cmd": run_cmd, "log": log}
 
-    log = []
-    for attempt in range(1, max_attempts + 1):
-        try:
-            argv = parse_run_command(run_cmd)
-            result = subprocess.run(
-                argv, shell=False, cwd=str(STAGING_DIR),
-                capture_output=True, text=True, timeout=30,
-            )
-        except ValueError as exc:
-            return {"success": False, "attempts": attempt,
-                    "error": f"Unsafe RUN command rejected: {exc}"}
-        except subprocess.TimeoutExpired:
-            # Long-running process (a server, a bot) — can't wait it out,
-            # treat as a pass and let the real run happen in the workspace
-            write_and_open(filenames, codes, WORKSPACE)
-            return {"success": True, "attempts": attempt, "note": "long_running",
-                    "filenames": filenames, "codes": codes, "run_cmd": run_cmd, "log": log}
+            if result.returncode == 0:
+                write_and_open(filenames, codes, WORKSPACE)
+                return {"success": True, "attempts": attempt, "output": result.stdout,
+                        "filenames": filenames, "codes": codes, "run_cmd": run_cmd, "log": log}
 
-        if result.returncode == 0:
-            # Verified working — NOW copy into the real workspace and open it
-            write_and_open(filenames, codes, WORKSPACE)
-            return {"success": True, "attempts": attempt, "output": result.stdout,
-                    "filenames": filenames, "codes": codes, "run_cmd": run_cmd, "log": log}
+            log.append({"attempt": attempt, "error": result.stderr[:400]})
+            if attempt == max_attempts:
+                return {"success": False, "attempts": attempt, "log": log,
+                        "last_error": result.stderr[:600]}
 
-        log.append({"attempt": attempt, "error": result.stderr[:400]})
-        if attempt == max_attempts:
-            # Failed every attempt — do NOT publish broken code to the real
-            # workspace. Staying honest about failure beats shipping a mess.
-            return {"success": False, "attempts": attempt, "log": log,
-                    "last_error": result.stderr[:600]}
+            code_dump = "\n\n".join(f"FILE {fn}:\n{codes[fn]}" for fn in filenames)
+            try:
+                fix_response = call_once([
+                    {"role": "system", "content": system_for_fixes},
+                    {"role": "user", "content":
+                        f"Task: {task}\n\n{code_dump}\n\nError when run:\n{result.stderr}\n\n"
+                        f"Fix it. Same FILENAME/code/RUN format, all files."},
+                ], "CODE", max_tok=4096, temp=0.1)
+            except Exception as e:
+                log.append({"attempt": attempt, "fix_call_failed": str(e)})
+                return {"success": False, "attempts": attempt, "log": log}
 
-        code_dump = "\n\n".join(f"FILE {fn}:\n{codes[fn]}" for fn in filenames)
-        try:
-            fix_response = call_once([
-                {"role": "system", "content": system_for_fixes},
-                {"role": "user", "content":
-                    f"Task: {task}\n\n{code_dump}\n\nError when run:\n{result.stderr}\n\n"
-                    f"Fix it. Same FILENAME/code/RUN format, all files."},
-            ], "CODE", max_tok=4096, temp=0.1)
-        except Exception as e:
-            log.append({"attempt": attempt, "fix_call_failed": str(e)})
-            return {"success": False, "attempts": attempt, "log": log}
+            fixed = parse_code_blocks(fix_response)
+            if fixed["saved"] and fixed.get("filenames"):
+                filenames, codes = fixed["filenames"], fixed["codes"]
+                run_cmd = fixed["run_cmd"] or run_cmd
+                write_and_open(filenames, codes, staging_dir, open_in_editor=False)
+            else:
+                log.append({"attempt": attempt, "error": "LLM fix output was malformed or empty"})
+                return {"success": False, "attempts": attempt, "log": log, "last_error": "Fix output was malformed"}
 
-        fixed = parse_code_blocks(fix_response)
-        if fixed["saved"] and fixed.get("filenames"):
-            filenames, codes = fixed["filenames"], fixed["codes"]
-            run_cmd = fixed["run_cmd"] or run_cmd
-            write_and_open(filenames, codes, STAGING_DIR, open_in_editor=False)
-        else:
-            log.append({"attempt": attempt, "error": "LLM fix output was malformed or empty"})
-            return {"success": False, "attempts": attempt, "log": log, "last_error": "Fix output was malformed"}
-
-    return {"success": False, "attempts": max_attempts, "log": log}
+        return {"success": False, "attempts": max_attempts, "log": log}
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
     for attempt in range(retries):
@@ -968,8 +993,21 @@ def _run_legal_draft(sid: str, pending: dict):
     socketio.emit("status", {"state": "idle"}, room=sid)
 
 
+def _socket_token_ok() -> bool:
+    expected = os.environ.get("VANTA_TOKEN", "").strip()
+    if not expected:
+        return True
+    header = request.headers.get("Authorization", "")
+    token = request.args.get("token") or request.headers.get("X-VANTA-TOKEN")
+    if header.lower().startswith("bearer "):
+        token = header[7:].strip()
+    return token == expected
+
+
 @socketio.on("connect")
 def on_connect():
+    if not _socket_token_ok():
+        return False
     conversations[request.sid] = []
     awake_sessions[request.sid] = True
     emit("status",    {"state": "idle"})

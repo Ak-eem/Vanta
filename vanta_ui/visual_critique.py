@@ -131,7 +131,13 @@ def run_visual_critique(groq_client, file_path: str):
     """Full pipeline: screenshot -> vision critique.
     Returns the critique text, or None if screenshots couldn't be taken
     (Playwright missing/not installed — fails silently, doesn't block the build)."""
-    shots = _screenshot_pair(file_path)
+    workspace_root = Path(os.environ.get("VANTA_WORKSPACE", str(Path.home() / "vanta_workspace"))).expanduser().expanduser().resolve()
+    candidate = Path(file_path).expanduser().resolve()
+    try:
+        candidate.relative_to(workspace_root)
+    except ValueError:
+        return None
+    shots = _screenshot_pair(str(candidate))
     if not shots:
         return None
 

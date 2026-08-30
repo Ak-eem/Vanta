@@ -266,6 +266,11 @@ class WatcherDaemon:
                         ("news", self.news_watcher),
                     ]
                 )
+                for name, component in (("file", self.file_watcher), ("news", self.news_watcher)):
+                    if hasattr(component, "_stop"):
+                        component._stop.set()
+                self._join_component("file", self.file_watcher)
+                self._join_component("news", self.news_watcher)
             finally:
                 self._component_threads.clear()
                 self._state = "stopped"
@@ -302,9 +307,9 @@ class WatcherDaemon:
             },
         )
 
-        severity_key = severity.lower() if isinstance(severity, str) else severity
-        rank = _SEVERITY_RANK.get(severity_key, -1)
-        floor = _SEVERITY_RANK[self.config["telegram_min_severity"]]
+        severity_key = severity.lower() if isinstance(severity, str) else None
+        rank = _SEVERITY_RANK.get(severity_key, -1) if isinstance(severity_key, str) else -1
+        floor = _SEVERITY_RANK.get(str(self.config["telegram_min_severity"]).lower(), 0)
         if rank < floor:
             return
 

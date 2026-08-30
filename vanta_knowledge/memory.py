@@ -36,11 +36,6 @@ DEFAULT_DB_PATH = Path.home() / ".vanta" / "vanta_memory.db"
 DEFAULT_MEMORY_MD_PATH = Path.home() / ".vanta" / "memory.md"
 DEFAULT_REPORT_PATH = Path.home() / ".vanta" / "memory_consolidation_report.md"
 
-# Set by init_db(); every other function falls back to this when called
-# without an explicit db_path, so normal callers never have to thread a
-# path through every call.
-_ACTIVE_DB_PATH: "Path | None" = None
-
 # Tri-state: None = not checked yet, True/False = known for this process.
 _FTS_AVAILABLE: "bool | None" = None
 
@@ -52,8 +47,6 @@ SIMILARITY_THRESHOLD = 0.55  # Jaccard token overlap for consolidate()
 def _resolve_path(db_path=None) -> Path:
     if db_path:
         return Path(db_path)
-    if _ACTIVE_DB_PATH:
-        return _ACTIVE_DB_PATH
     return DEFAULT_DB_PATH
 
 
@@ -167,16 +160,13 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def init_db(db_path=None) -> Path:
-    """Create/open the DB, ensure schema, and make this path the default
-    for every other function in the module that doesn't get an explicit
-    db_path. Safe to call more than once."""
-    global _ACTIVE_DB_PATH
+    """Create/open the DB and ensure schema. All callers should pass the
+    desired db_path explicitly to avoid shared process-global path state."""
     path = Path(db_path) if db_path else DEFAULT_DB_PATH
     with _Conn(path) as conn:
         _set_meta(conn, "schema_version", "1")
         if _get_meta(conn, "profile_path") is None:
             _set_meta(conn, "profile_path", str(path.parent / "memory.md"))
-    _ACTIVE_DB_PATH = path
     return path
 
 
@@ -624,14 +614,11 @@ def summarize_conversation(turns: list) -> str:
 
 
 def process_turn(user_text: str, assistant_text: str = "", db_path=None) -> list:
-    """Post-turn hook: extract from both sides of the exchange, and only
-    rewrite memory.md if something new was actually learned. Returns the
-    combined list of newly created memory ids."""
+    """Post-turn hook: extract from the user text only, and only rewrite
+    memory.md when something new was actually learned."""
     ids = []
     if user_text:
         ids += extract_memories(user_text, source="user_turn", db_path=db_path)
-    if assistant_text:
-        ids += extract_memories(assistant_text, source="assistant_turn", db_path=db_path)
     if ids:
         write_memory_md(db_path=db_path)
     return ids

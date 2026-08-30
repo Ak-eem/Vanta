@@ -65,7 +65,7 @@ class NewsWatcher:
         new_items = []
         for feed_url in self.feeds:
             try:
-                parsed = feedparser.parse(feed_url)
+                parsed = feedparser.parse(feed_url, request_headers={"User-Agent": "Vanta/1.0"})
             except Exception:
                 continue
             for entry in parsed.entries[:10]:
@@ -101,6 +101,7 @@ If nothing qualifies: {{"significant": []}}"""
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=500,
+                timeout=15,
             )
             raw = resp.choices[0].message.content.strip()
             raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()

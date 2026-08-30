@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
@@ -101,6 +102,9 @@ class OpenRouterClient:
         app_title: str = "Vanta",
     ) -> None:
         self.api_key = api_key.strip()
+        parsed = urllib.parse.urlparse(base_url)
+        if parsed.scheme != "https" or parsed.netloc.lower() not in {"openrouter.ai", "api.openrouter.ai"}:
+            raise ValueError("OPENROUTER_BASE_URL must use https://openrouter.ai/api/v1")
         self.base_url = base_url.rstrip("/")
         self.flash_model = flash_model
         self.brain_model = brain_model

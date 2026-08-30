@@ -1,11 +1,5 @@
 {
-  "projects": [
-    {
-      "path": "C:\\Users\\User\\dressence",
-      "test_command": "",
-      "test_interval_min": 15
-    }
-  ],
+  "projects": [],
   "news_feeds": [],
   "news_poll_minutes": 45,
   "telegram_bot_token": "",

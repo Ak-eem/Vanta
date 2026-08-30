@@ -13,6 +13,7 @@ Design:
 import json
 import re
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -96,6 +97,9 @@ _EXTRACT_PATTERNS = [
 ]
 
 
+_DB_LOCK = threading.RLock()
+
+
 # ── DB lifecycle ─────────────────────────────────────────────────────────────
 def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Initialise the memory database. Creates tables, indexes, FTS5, WAL."""
@@ -108,21 +112,15 @@ def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
 
 def _get_con(db_path: Optional[Path] = None) -> sqlite3.Connection:
-    """Lazy singleton per path (not thread-safe across paths, fine for single-process)."""
+    """Open a fresh connection per operation; the module-level lock serializes
+    access across threads to avoid cross-thread SQLite misuse."""
     path = db_path or DEFAULT_DB
-    cache_key = f"_con_{path}"
-    if cache_key not in _get_con.__dict__:
-        _get_con.__dict__[cache_key] = init_db(path)
-    return _get_con.__dict__[cache_key]
+    return init_db(path)
 
 
 def close_db(db_path: Optional[Path] = None) -> None:
-    """Close and remove the cached connection for a database path."""
-    path = db_path or DEFAULT_DB
-    cache_key = f"_con_{path}"
-    con = _get_con.__dict__.pop(cache_key, None)
-    if con is not None:
-        con.close()
+    """No-op for the per-operation connection model; retained for compatibility."""
+    return None
 
 
 # ── Core CRUD ────────────────────────────────────────────────────────────────
@@ -393,10 +391,9 @@ def process_turn(
     assistant_text: str = "",
     db_path: Optional[Path] = None,
 ) -> list[int]:
-    """Post-turn hook: extract memories from both sides, update memory.md
-    only if new entries were added. Returns inserted ids."""
-    combined = f"{user_text}\n{assistant_text}"
-    inserted = extract_memories(combined, source="turn", db_path=db_path)
+    """Post-turn hook: extract memories from the user's text only, update
+    memory.md only if new entries were added. Returns inserted ids."""
+    inserted = extract_memories(user_text or "", source="turn", db_path=db_path)
     if inserted:
         write_memory_md(db_path=db_path)
     return inserted
