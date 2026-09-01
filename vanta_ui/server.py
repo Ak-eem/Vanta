@@ -121,7 +121,7 @@ if MEMORY_OK:
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "vanta-v4")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"], async_mode="threading")
 _BACKGROUND_POOL = ThreadPoolExecutor(max_workers=6)
 
 conversations: dict[str, list] = {}
@@ -1231,17 +1231,19 @@ def index():
 
     The template ``index.html`` expects a ``boot_status`` mapping that provides
     initial status strings for the UI, core, knowledge, and voice subsystems.
-    Previously the route did not supply this variable, causing a Jinja
-    ``UndefinedError`` when accessing ``boot_status.*`` and resulting in a
-    500 Internal Server Error on ``/``.  We now pass a default status dict with
-    ``UNAVAILABLE`` values for each component, which the client‑side JavaScript
-    interprets as the default (and later updates the UI module to ``READY``).
+    This used to not get passed at all, then got passed with lowercase values
+    the frontend's uppercase check never matched, then got passed correctly
+    cased but hardcoded to "UNAVAILABLE" regardless of real state. This
+    computes actual status from what's already known at this point.
+    (The 500-error claim above doesn't hold, for the record — Flask/Jinja's
+    default Undefined stringifies to empty rather than raising; verified
+    directly by rendering the template with boot_status omitted.)
     """
     boot_status = {
-        "ui": "UNAVAILABLE",
-        "core": "UNAVAILABLE",
-        "knowledge": "UNAVAILABLE",
-        "voice": "UNAVAILABLE",
+        "ui": "READY",                                   # we're rendering it right now
+        "core": "READY" if GROQ_API_KEY else "UNAVAILABLE",
+        "knowledge": "READY" if (RAG_OK or GOOGLE_OK) else "UNAVAILABLE",
+        "voice": "READY" if GROQ_API_KEY else "UNAVAILABLE",  # transcription rides the same Groq client
     }
     return render_template(
         "index.html",
