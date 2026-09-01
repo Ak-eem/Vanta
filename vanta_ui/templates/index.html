@@ -77,6 +77,8 @@
   .msg-text strong { color: #fff; font-weight: 600; }
   .msg-text em { color: #bcd; font-style: italic; }
   .msg-text .md-inline-code { background: #0d1520; border: 1px solid var(--border-blue); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 11px; color: #4df0ff; }
+  .msg-text .md-link { color: var(--blue-accent); text-decoration: underline; text-underline-offset: 2px; }
+  .msg-text .md-link:hover { color: #4df0ff; }
   .msg-text .md-code { background: #0a0e14; border: 1px solid var(--border-blue); border-radius: 6px; padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
   .msg-text .md-code code { font-family: var(--font-mono); font-size: 11px; color: #cde; white-space: pre; }
   .msg-text .md-list { margin: 6px 0 10px 0; padding-left: 18px; }
@@ -315,6 +317,14 @@
       `<pre class="md-code"><code>${code.trim()}</code></pre>`);
 
     text = text.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+
+    // Markdown links: [text](url). Wasn't handled at all before — a model
+    // outputting [check this out](https://...) just showed the literal
+    // brackets and parens as text, nothing clickable. Restricted to
+    // http(s) specifically so a crafted javascript: URI in model output
+    // can't end up as a live href.
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1</a>');
     text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
 
