@@ -1,5 +1,4 @@
-"""Small import-safe helpers for generated
-command handling."""
+"""Small import-safe helpers for generated command handling."""
 
 import os
 import shlex
