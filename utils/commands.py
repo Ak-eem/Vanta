@@ -20,13 +20,19 @@ DANGEROUS_EXECUTABLES = {
     "cmd",
     "bash",
     "sh",
+    "chmod",
+    "chown",
+    "mv",
+    "cp",
+    "kill",
+    "pkill",
+    "taskkill",
 }
-
-_META_CHARS = set(";&|><`$\n\r\0")
+_META_CHARS = set(";|&`\n\r\0><$()*?!~[],")
 
 
 def _allowed_executables() -> set[str]:
-    allowed = {"python", "python3", "node", "npm", "git"}
+    allowed = {"python", "python3", "node", "npm", "npx", "git"}
     custom = os.environ.get("VANTA_ALLOWED_RUN_COMMANDS", "").strip()
     if custom:
         for item in custom.replace(";", ",").split(","):
@@ -52,7 +58,9 @@ def parse_run_command(cmd: str) -> list[str]:
 
     for token in tokens:
         if any(ch in token for ch in _META_CHARS):
-            raise ValueError("RUN command contains forbidden shell metacharacters or chaining syntax")
+            raise ValueError(
+                "RUN command contains forbidden shell metacharacters or chaining syntax"
+            )
 
     executable = os.path.basename(tokens[0]).lower()
     if executable in DANGEROUS_EXECUTABLES:
@@ -62,7 +70,9 @@ def parse_run_command(cmd: str) -> list[str]:
     resolved = shutil.which(tokens[0])
     if not resolved:
         if executable not in allowed:
-            raise ValueError(f"RUN executable is not allowed or not installed: {tokens[0]!r}")
+            raise ValueError(
+                f"RUN executable is not allowed or not installed: {tokens[0]!r}"
+            )
         resolved = executable
     executable_name = os.path.basename(resolved).lower()
     if executable_name in DANGEROUS_EXECUTABLES or executable_name not in allowed:
