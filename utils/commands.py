@@ -1,4 +1,5 @@
-"""Small import-safe helpers for generated command handling."""
+"""Small import-safe helpers for generated
+command handling."""
 
 import os
 import shlex
@@ -28,7 +29,7 @@ DANGEROUS_EXECUTABLES = {
     "pkill",
     "taskkill",
 }
-_META_CHARS = set(";|&`\n\r\0><$()*?!~[],")
+_META_CHARS = set(";|&`\n\r\0><$()*?!~[]")
 
 
 def _allowed_executables() -> set[str]:
