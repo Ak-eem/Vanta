@@ -90,6 +90,9 @@ if not GROQ_API_KEY:
 MODEL      = os.environ.get("VANTA_MODEL",      "openai/gpt-oss-120b")
 AGENT      = os.environ.get("VANTA_AGENT_NAME", "Vanta")
 USER       = os.environ.get("VANTA_USER_NAME",  "Akeem")
+ALLOW_GENERATED_EXECUTION = os.environ.get(
+    "VANTA_ALLOW_GENERATED_EXECUTION", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 def _load_workspace() -> str:
     """vanta_config.txt (project root) takes priority over .env, so the
@@ -124,6 +127,7 @@ if MEMORY_OK:
 
 BASE = Path(__file__).parent
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 FLASK_SECRET = os.environ.get("FLASK_SECRET")
 if not FLASK_SECRET:
     raise RuntimeError("FLASK_SECRET environment variable is required; set it in your environment or .env file.")
@@ -821,7 +825,18 @@ def write_and_open(filenames: list, codes: dict, target_dir, open_in_editor: boo
             continue
         safe_filenames.append(filename)
         candidate.parent.mkdir(parents=True, exist_ok=True)
-        candidate.write_text(codes[filename], encoding="utf-8")
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=candidate.parent,
+                prefix=f".{candidate.name}.", suffix=".tmp", delete=False,
+            ) as temp_file:
+                temp_file.write(codes[filename])
+                temp_path = Path(temp_file.name)
+            os.replace(temp_path, candidate)
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
     if open_in_editor and safe_filenames:
         try:
@@ -928,6 +943,8 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
+    if not ALLOW_GENERATED_EXECUTION:
+        return "⚠ Generated code execution is disabled. Set VANTA_ALLOW_GENERATED_EXECUTION=true to opt in."
     for attempt in range(retries):
         try:
             argv = parse_run_command(cmd)
@@ -1025,7 +1042,24 @@ def on_disconnect():
     awake_sessions.pop(request.sid, None)
     checklist_pending.pop(request.sid, None)
 
+def _guard_chat_handler(handler):
+    def guarded(data):
+        sid = request.sid
+        if not isinstance(data, dict) or not isinstance(data.get("message", ""), str):
+            socketio.emit("error", {"message": "Invalid chat payload."}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+            return
+        try:
+            return handler(data)
+        except Exception as exc:
+            print(f"🔴 chat exception: {type(exc).__name__}: {exc}")
+            socketio.emit("error", {"message": "Chat request failed."}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+
+    return guarded
+
 @socketio.on("chat")
+@_guard_chat_handler
 def handle_chat(data):
     sid  = request.sid
     msg  = data.get("message", "").strip()
@@ -1194,7 +1228,10 @@ def handle_chat(data):
             socketio.emit("status", {"state": "thinking",
                 "message": "Visual check…"}, room=sid)
             visual_notes = run_visual_critique(
-                client, str(Path(WORKSPACE) / info["filename"]))
+                client,
+                str(Path(WORKSPACE) / info["filename"]),
+                workspace_root=WORKSPACE,
+            )
             if visual_notes and "no visual issues" not in visual_notes.lower():
                 socketio.emit("response",
                     {"text": f"👁 Visual check:\n{visual_notes}"}, room=sid)
@@ -1219,7 +1256,10 @@ def handle_chat_tools(data):
     exactly as before. Genuinely untested against a live Groq response;
     this is where that gets found out."""
     sid = request.sid
-    task = data.get("message", "").strip()
+    if not isinstance(data, dict) or not isinstance(data.get("message", ""), str):
+        socketio.emit("error", {"message": "Invalid tool payload."}, room=sid)
+        return
+    task = data["message"].strip()
     if not task:
         return
     print(f"🔧 chat_tools received: {task[:60]!r}")
@@ -1235,7 +1275,10 @@ def handle_chat_tools(data):
 @socketio.on("orchestrate")
 def handle_orchestrate(data):
     sid = request.sid
-    msg = data.get("message", "").strip()
+    if not isinstance(data, dict) or not isinstance(data.get("message", ""), str):
+        socketio.emit("error", {"message": "Invalid orchestration payload."}, room=sid)
+        return
+    msg = data["message"].strip()
     if not msg or not ORCH_OK:
         socketio.emit("error", {"message": "Orchestrator unavailable."}, room=sid)
         return
@@ -1295,6 +1338,10 @@ def transcribe():
     f = request.files.get("audio")
     if not f:
         return jsonify({"error": "No audio"}), 400
+    if f.mimetype not in {"audio/webm", "audio/ogg", "audio/wav", "audio/mpeg"}:
+        return jsonify({"error": "Unsupported audio type"}), 415
+    if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
+        return jsonify({"error": "Audio upload is too large"}), 413
     tmp = Path(tempfile.gettempdir()) / f"vanta_ptt_{uuid.uuid4().hex}.webm"
     f.save(str(tmp))
     try:

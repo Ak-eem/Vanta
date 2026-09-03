@@ -97,6 +97,8 @@ class VantaOrchestrator:
         emit("Analyzing task...", "Vanta", "thinking")
         analysis = analyze_task(task, self.analysis_client, self.analysis_model)
         subtasks = analysis.get("subtasks", [])
+        if not isinstance(subtasks, list):
+            subtasks = []
         emit(f"Found {len(subtasks)} sub-tasks", "Vanta", "done")
 
         # If it's simple or orchestration isn't needed, handle directly.
@@ -115,7 +117,21 @@ class VantaOrchestrator:
                 return self._local_fallback(task)
 
         results = []
-        for subtask in sorted(subtasks, key=lambda x: x.get("priority", 99)):
+        valid_subtasks = [
+            subtask
+            for subtask in subtasks
+            if isinstance(subtask, dict)
+            and isinstance(subtask.get("type"), str)
+            and isinstance(subtask.get("description"), str)
+            and subtask["description"].strip()
+        ]
+        for subtask in sorted(
+            valid_subtasks,
+            key=lambda x: x.get("priority")
+            if isinstance(x.get("priority"), (int, float))
+            and not isinstance(x.get("priority"), bool)
+            else 99,
+        ):
             task_type = subtask["type"]
             description = subtask["description"]
             model_list = get_model_list(task_type)

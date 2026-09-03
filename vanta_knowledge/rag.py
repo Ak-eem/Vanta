@@ -179,37 +179,36 @@ def score_chunk(chunk: str, query_words: list) -> float:
     return sum(len(w) * chunk_lower.count(w) for w in query_words if w in chunk_lower)
 
 
-def _category_for_query(query_lower: str) -> str | None:
-    if any(w in query_lower for w in ('deploy', 'deployment', 'hosting', 'host',
-                                      'vercel', 'supabase', 'domain', 'dns', 'ssl', 'go live', 'production',
-                                      'launch', 'env variable', 'environment variable')):
-        return 'deployment'
-    if any(w in query_lower for w in ('cart', 'checkout', 'product grid',
-                                      'product card', 'e-commerce', 'ecommerce', 'online store',
-                                      'variant', 'size selector', 'add to cart', 'wishlist')):
-        return 'ecommerce'
-    if any(w in query_lower for w in ('website', 'ui', 'frontend', 'html', 'css',
-                                      'design', 'landing', 'portfolio', 'animation', 'layout', 'navbar',
-                                      'hero', 'card', 'dark', 'cinematic', 'glassmorphism', 'cursor',
-                                      'accessibility', 'a11y', 'alt text', 'screen reader', 'contrast',
-                                      'keyboard nav', 'aria', 'focus state',
-                                      'restaurant', 'menu', 'reservation', 'school', 'enrollment',
-                                      'tuition', 'repair shop', 'salon', 'clinic', 'booking',
-                                      'appointment', 'local business', 'small business', 'gym',
-                                      'fitness', 'law firm', 'lawyer', 'attorney', 'dentist',
-                                      'doctor', 'medical practice', 'photographer', 'photography',
-                                      'real estate', 'contractor', 'plumber', 'electrician',
-                                      'event planner', 'bakery', 'cafe', 'hotel', 'spa',
-                                      'non-profit', 'church', 'service business')):
-        return 'webdev'
-    if any(w in query_lower for w in ('security', 'vulnerability', 'xss', 'injection',
-                                      'auth', 'login', 'password', 'token', 'sanitize', 'secure', 'encrypt',
-                                      'cors', 'csrf')):
-        return 'security'
-    if any(w in query_lower for w in ('database', 'db', 'sql', 'postgres', 'sqlite',
-                                      'firebase', 'schema', 'query', 'migration', 'table', 'index', 'orm')):
-        return 'databases'
-    return None
+def _categories_for_query(query_lower: str) -> set[str]:
+    def matches(signal: str) -> bool:
+        pattern = r"\b" + r"\s+".join(re.escape(part) for part in signal.split()) + r"\b"
+        return re.search(pattern, query_lower) is not None
+
+    signals = {
+        'deployment': ('deploy', 'deployment', 'hosting', 'host', 'vercel', 'supabase',
+                       'domain', 'dns', 'ssl', 'go live', 'production', 'launch',
+                       'env variable', 'environment variable'),
+        'ecommerce': ('cart', 'checkout', 'product grid', 'product card', 'e-commerce',
+                      'ecommerce', 'online store', 'variant', 'size selector',
+                      'add to cart', 'wishlist'),
+        'webdev': ('website', 'ui', 'frontend', 'html', 'css', 'design', 'landing',
+                   'portfolio', 'animation', 'layout', 'navbar', 'hero', 'card', 'dark',
+                   'cinematic', 'glassmorphism', 'cursor', 'accessibility', 'a11y',
+                   'alt text', 'screen reader', 'contrast', 'keyboard nav', 'aria',
+                   'focus state', 'restaurant', 'menu', 'reservation', 'school',
+                   'enrollment', 'tuition', 'repair shop', 'salon', 'clinic', 'booking',
+                   'appointment', 'local business', 'small business', 'gym', 'fitness',
+                   'law firm', 'lawyer', 'attorney', 'dentist', 'doctor',
+                   'medical practice', 'photographer', 'photography', 'real estate',
+                   'contractor', 'plumber', 'electrician', 'event planner', 'bakery',
+                   'cafe', 'hotel', 'spa', 'non-profit', 'church', 'service business'),
+        'security': ('security', 'vulnerability', 'xss', 'injection', 'auth', 'login',
+                     'password', 'token', 'sanitize', 'secure', 'encrypt', 'cors', 'csrf'),
+        'databases': ('database', 'db', 'sql', 'postgres', 'sqlite', 'firebase', 'schema',
+                      'query', 'migration', 'table', 'index', 'orm'),
+    }
+    return {category for category, category_signals in signals.items()
+            if any(matches(signal) for signal in category_signals)}
 
 
 def query_rag(query: str, top_k: int = 3) -> str:
@@ -223,9 +222,9 @@ def query_rag(query: str, top_k: int = 3) -> str:
     if not all_chunks:
         return ""
 
-    category = _category_for_query(query.lower())
-    pool = [c for c in all_chunks if c["category"] == category] if category else all_chunks
-    if category and not pool:
+    categories = _categories_for_query(query.lower())
+    pool = [c for c in all_chunks if c["category"] in categories] if categories else all_chunks
+    if categories and not pool:
         pool = all_chunks
 
     stopwords = {'a','an','the','and','or','but','in','on','at','to','for','of',

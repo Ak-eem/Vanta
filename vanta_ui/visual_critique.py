@@ -127,11 +127,14 @@ def _critique_screenshots_openrouter(
     raise last_error
 
 
-def run_visual_critique(groq_client, file_path: str):
+def run_visual_critique(groq_client, file_path: str, workspace_root: str | None = None):
     """Full pipeline: screenshot -> vision critique.
     Returns the critique text, or None if screenshots couldn't be taken
     (Playwright missing/not installed — fails silently, doesn't block the build)."""
-    workspace_root = Path(os.environ.get("VANTA_WORKSPACE", str(Path.home() / "vanta_workspace"))).expanduser().expanduser().resolve()
+    workspace_root = Path(
+        workspace_root
+        or os.environ.get("VANTA_WORKSPACE", str(Path.home() / "vanta_workspace"))
+    ).expanduser().resolve()
     candidate = Path(file_path).expanduser().resolve()
     try:
         candidate.relative_to(workspace_root)

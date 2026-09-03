@@ -6,6 +6,7 @@ so restarts don't re-trigger old stories.
 
 import json
 import threading
+import urllib.request
 from pathlib import Path
 
 try:
@@ -63,24 +64,31 @@ class NewsWatcher:
 
     def _poll_once(self):
         new_items = []
+        pending_ids = set()
         for feed_url in self.feeds:
             try:
-                parsed = feedparser.parse(feed_url, request_headers={"User-Agent": "Vanta/1.0"})
+                request = urllib.request.Request(
+                    feed_url, headers={"User-Agent": "Vanta/1.0"}
+                )
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    parsed = feedparser.parse(response.read())
             except Exception:
                 continue
             for entry in parsed.entries[:10]:
                 uid = entry.get("id") or entry.get("link")
-                if not uid or uid in self._seen:
+                if not uid or uid in self._seen or uid in pending_ids:
                     continue
-                self._seen[uid] = True
+                pending_ids.add(uid)
                 new_items.append({
+                    "uid": uid,
                     "title": entry.get("title", ""),
                     "summary": entry.get("summary", "")[:300],
                     "link": entry.get("link", ""),
                 })
         if new_items:
-            self._save_seen()
-            self._filter_and_alert(new_items)
+            if self._filter_and_alert(new_items):
+                self._seen.update({item["uid"]: True for item in new_items})
+                self._save_seen()
 
     def _filter_and_alert(self, items: list[dict]):
         listing = "\n".join(
@@ -107,15 +115,24 @@ If nothing qualifies: {{"significant": []}}"""
             raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             data = json.loads(raw)
         except Exception:
-            return
+            return False
+
+        if not isinstance(data, dict) or not isinstance(data.get("significant"), list):
+            return False
 
         for flagged in data.get("significant", []):
+            if not isinstance(flagged, dict):
+                continue
             idx = flagged.get("index", 0) - 1
             if 0 <= idx < len(items):
                 item = items[idx]
-                self.on_alert(
-                    flagged.get("severity", "low"),
-                    item["title"],
-                    flagged.get("reason", ""),
-                    source=item["link"],
-                )
+                try:
+                    self.on_alert(
+                        flagged.get("severity", "low"),
+                        item["title"],
+                        flagged.get("reason", ""),
+                        source=item["link"],
+                    )
+                except Exception:
+                    pass
+        return True

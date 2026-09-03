@@ -85,6 +85,12 @@ def should_orchestrate(analysis: dict) -> bool:
     if analysis.get("needs_orchestration"):
         return True
     subtasks = analysis.get("subtasks", [])
-    types    = {s["type"] for s in subtasks}
+    if not isinstance(subtasks, list):
+        return False
+    types = {
+        subtask.get("type")
+        for subtask in subtasks
+        if isinstance(subtask, dict) and isinstance(subtask.get("type"), str)
+    }
     # Orchestrate if there are 3+ distinct task types
     return len(types) >= 3

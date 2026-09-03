@@ -146,8 +146,12 @@ def google_search_context(query: str, use_cache: bool = True) -> str:
 
         if loop is not None and loop.is_running():
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                results = pool.submit(asyncio.run, _search_async(query)).result(timeout=10)
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = pool.submit(asyncio.run, _search_async(query))
+            try:
+                results = future.result(timeout=10)
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
         else:
             results = asyncio.run(_search_async(query))
     except Exception as e:
