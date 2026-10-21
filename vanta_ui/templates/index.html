@@ -281,10 +281,11 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script src="/static/vendor/three.r128.min.js"></script>
+<script src="/static/vendor/socket.io.4.7.2.min.js"></script>
+<script src="/static/vendor/prism-core.min.js"></script>
+<script src="/static/vendor/prism-autoloader.min.js"></script>
+<script>if(window.Prism&&Prism.plugins&&Prism.plugins.autoloader){Prism.plugins.autoloader.languages_path="/static/vendor/prism-components/";}</script>
 <script>
 (function(){
   function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
