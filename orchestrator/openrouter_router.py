@@ -19,15 +19,17 @@ from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 
 from .model_router import FREE_MODEL_PRIORITIES
+from . import free_catalog
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLASH_MODEL = "google/gemini-2.0-flash-exp:free"
-# NOTE: The correct model identifier for Nemotron 3 Ultra 550B is "a5b", not "a55b".
-# The typo prevented the intended model from being selected, silently falling
-# back to the brain fallback model and causing mis‑routing of tasks.
-DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a5b:free"
+# These defaults are only *preferences*. At call time they are checked against
+# OpenRouter's live free-model list (see free_catalog) and swapped for a live
+# model if they no longer exist. Both "a55b" and "a5b" spellings were absent
+# from the live list when checked, so IDs must never be trusted blindly.
+DEFAULT_BRAIN_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 DEFAULT_BRAIN_FALLBACK_MODEL = "z-ai/glm-5.2:free"
 
 
@@ -164,8 +166,8 @@ class OpenRouterClient:
         brain-fallback behavior remains owned by ``complete``.
         """
         progress = on_progress or callback
-        models = FREE_MODEL_PRIORITIES.get(
-            task_type, FREE_MODEL_PRIORITIES["other"]
+        models = free_catalog.resolve(
+            FREE_MODEL_PRIORITIES.get(task_type, FREE_MODEL_PRIORITIES["other"])
         )
         last_error: Optional[OpenRouterError] = None
 
@@ -208,6 +210,10 @@ class OpenRouterClient:
         models = [model]
         if model == self.brain_model and self.brain_fallback_model != model:
             models.append(self.brain_fallback_model)
+        # Replace dead IDs with live ones (no-op if catalog unreachable).
+        models = list(dict.fromkeys(
+            free_catalog.best(m) if m.endswith(":free") else m for m in models
+        ))
 
         last_error: Optional[OpenRouterError] = None
         for attempt, requested_model in enumerate(models):

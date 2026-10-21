@@ -59,7 +59,7 @@ class VantaOrchestrator:
         self.openrouter = OpenRouterClient.from_env()
         if self.openrouter is not None:
             self.analysis_client = self.openrouter
-            self.analysis_model = self.openrouter.flash_model
+            self.analysis_model = self.openrouter.brain_model
             self.merge_client = self.openrouter
             # OpenRouter owns transparent Nemotron -> DeepSeek R1 failover;
             # keep the existing analysis/merge wiring unchanged.
