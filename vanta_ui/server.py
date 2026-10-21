@@ -1372,4 +1372,7 @@ if __name__ == "__main__":
         watcher_daemon = WatcherDaemon(client, MODEL, socketio, agent_name=AGENT)
         watcher_daemon.start()
 
-    socketio.run(app, host="127.0.0.1", port=port, debug=False)
+    # allow_unsafe_werkzeug: lets VANTA run as a background/login service
+    # (no interactive terminal). Safe here because we only bind 127.0.0.1.
+    socketio.run(app, host="127.0.0.1", port=port, debug=False,
+                 allow_unsafe_werkzeug=True)
