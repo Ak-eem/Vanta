@@ -20,6 +20,7 @@ from typing import Any, Mapping, Optional
 
 from .model_router import FREE_MODEL_PRIORITIES
 from . import free_catalog
+from .pool import COOLDOWNS
 
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,8 @@ class OpenRouterClient:
         last_error: Optional[OpenRouterError] = None
 
         for index, model in enumerate(models):
+            if not COOLDOWNS.available(f"or:{model}"):
+                continue  # recently rate-limited; don't waste a call
             if progress:
                 progress(model, "trying", None)
             try:
@@ -180,11 +183,14 @@ class OpenRouterClient:
                     messages=[{"role": "user", "content": task_prompt}],
                 )
                 content = response.choices[0].message.content
+                COOLDOWNS.ok(f"or:{model}")
                 if progress:
                     progress(model, "done", content)
                 return content, model
             except OpenRouterError as exc:
                 last_error = exc
+                if exc.retryable:
+                    COOLDOWNS.fail(f"or:{model}", base=60)
                 logger.warning(
                     "OpenRouter free model=%s failed (%s/%s): %s",
                     model,

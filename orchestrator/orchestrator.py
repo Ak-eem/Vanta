@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from .task_analyzer import analyze_task, should_orchestrate
 from .model_router import get_model_list, get_model_info
+from .pool import GeminiClient, ProviderPool
 from .openrouter_router import OpenRouterClient
 
 
@@ -69,6 +70,15 @@ class VantaOrchestrator:
             self.analysis_model = model
             self.merge_client = groq_client
             self.merge_model = model
+
+        # Free-provider pool: cache -> OpenRouter -> Gemini -> Groq, with
+        # per-provider cooldowns and call budgets.
+        self.pool = ProviderPool(
+            openrouter=self.openrouter,
+            gemini=GeminiClient.from_env(),
+            groq=groq_client,
+            groq_model=model,
+        )
 
     def _get_agent(self) -> "BrowserAgentSync":
         if not BROWSER_OK or BrowserAgentSync is None:
@@ -161,22 +171,14 @@ class VantaOrchestrator:
                         prompt=prompt,
                         on_progress=on_progress,
                     )
-                elif self.openrouter is not None:
-                    response, model_used = self.openrouter.execute(
+                else:
+                    response, model_used = self.pool.run(
                         prompt,
                         task_type,
                         on_progress=lambda model_name, status, result=None: emit(
                             f"Sub-task: {task_type}", model_name, status, result
                         ),
                     )
-                else:
-                    emit(
-                        "OpenRouter is not configured; handling sub-task locally",
-                        "Vanta",
-                        "thinking",
-                    )
-                    response = self._local_fallback(prompt)
-                    model_used = self.model
             except Exception as exc:
                 emit(f"Execution failed ({exc}); using local fallback", "Vanta", "thinking")
                 response = self._local_fallback(prompt)
