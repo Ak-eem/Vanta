@@ -6,7 +6,7 @@ VANTA Server v4 — Natural Intelligence Mode
 - Parallel classify + search before LLM call to minimize latency
 """
 
-import os, re, sys, time, json, subprocess, tempfile, uuid, shutil
+import os, re, sys, time, json, subprocess, tempfile, uuid, shutil, threading
 
 # Ensure Windows stdout/stderr handles UTF-8 characters without charmap errors
 if hasattr(sys.stdout, "reconfigure"):
@@ -1191,6 +1191,14 @@ def handle_chat(data):
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode, has_history)
     routed_model = pick_model(effort)
     messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    if AWARE_OK:
+        try:
+            bridge.note_claims(msg)
+            extra = bridge.context_for(msg)
+            if extra:
+                messages[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
+        except Exception as exc:
+            print(f"[awareness] context failed: {exc}")
 
     # ── Optional thinking pass — streams reasoning before the real answer ──
     # Scoped to the plain chat path only (UI critique loop already does its
@@ -1334,10 +1342,96 @@ def handle_orchestrate(data):
     finally:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
+@socketio.on("privacy_get")
+def on_privacy_get():
+    if AWARE_OK:
+        emit("privacy_state", privacy.snapshot())
+
+
+@socketio.on("privacy_pause")
+def on_privacy_pause(data):
+    if AWARE_OK:
+        privacy.set_paused(bool((data or {}).get("paused", True)))
+
+
+@socketio.on("privacy_source")
+def on_privacy_source(data):
+    if AWARE_OK and isinstance(data, dict) and "name" in data:
+        privacy.set_source(str(data["name"]), bool(data.get("enabled")))
+
+
+@socketio.on("nudge_ack")
+def on_nudge_ack(data):
+    if AWARE_OK and isinstance(data, dict):
+        nudges.ack(str(data.get("id", "")))
+
+
 @socketio.on("clear_memory")
 def handle_clear():
     conversations[request.sid] = []
     emit("status", {"state": "idle", "message": "Memory cleared."})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ██  AWARENESS (Phase 2): privacy, activity log, watchers, nudges, people memory
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    from awareness.privacy import PrivacyState
+    from awareness.events import ActivityLog
+    from awareness.process_watcher import ProcessWatcher
+    from awareness.window_watcher import WindowWatcher, snapshot_focused
+    from awareness.frame_diff import ScreenWatcher
+    from awareness.nudges import NudgeEngine
+    from awareness.memory_bridge import MemoryBridge
+    from awareness.tray import Tray
+    from vanta_knowledge.people import People
+    AWARE_OK = True
+except Exception as _e:  # keep VANTA usable if an optional dependency is missing
+    print(f"⚠️  Awareness layer unavailable: {_e}")
+    AWARE_OK = False
+
+privacy = activity_log = nudges = bridge = people_db = None
+proc_watcher = window_watcher = screen_watcher = tray = None
+latest_page: dict = {}
+
+if AWARE_OK:
+    privacy = PrivacyState()
+    activity_log = ActivityLog(privacy)
+    people_db = People()
+    bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
+    nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
+    privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
+
+    def _on_process_alert(severity, title, message, source):
+        sev = {"high": "high", "medium": "medium"}.get(severity, "low")
+        socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
+        nudges.nudge(f"{source}:{title}", sev, title, message)
+
+    proc_watcher = ProcessWatcher(activity_log, _on_process_alert)
+    window_watcher = WindowWatcher(activity_log)
+    screen_watcher = ScreenWatcher(activity_log)
+
+
+def start_awareness(port: int) -> None:
+    if not AWARE_OK:
+        return
+    proc_watcher.start()
+    window_watcher.start()
+    screen_watcher.start()          # stays idle unless the 'screen' source is switched on
+    global tray
+    tray = Tray(privacy, f"http://127.0.0.1:{port}")
+    tray.start()
+
+    def _housekeeping():
+        while True:
+            try:
+                nudges.escalate_due()
+                if int(time.time()) % (6 * 3600) < 60:
+                    bridge.nightly()
+            except Exception as exc:
+                print(f"[awareness] housekeeping: {exc}")
+            time.sleep(30)
+    threading.Thread(target=_housekeeping, name="vanta-housekeeping", daemon=True).start()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  HTTP ROUTES
@@ -1416,6 +1510,34 @@ def transcribe():
     finally:
         tmp.unlink(missing_ok=True)
 
+@app.route("/api/awareness/page", methods=["POST"])
+def api_awareness_page():
+    """Receives page snapshots from the VANTA Eyes Chrome extension (token required)."""
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if not AWARE_OK:
+        return jsonify({"ok": False}), 503
+    d = request.get_json(silent=True) or {}
+    url, title, text = str(d.get("url", ""))[:500], str(d.get("title", ""))[:200], str(d.get("text", ""))[:2500]
+    if not privacy.allows("browser", "chrome", title, url):
+        return jsonify({"ok": True, "recorded": False})
+    host = re.sub(r"^https?://([^/]+).*$", r"\1", url)
+    activity_log.add("browser", "page", app="chrome", title=f"{title} ({host})", url=url)
+    latest_page.update({"url": url, "title": title, "text": privacy.redact(text), "ts": time.time()})  # RAM only
+    return jsonify({"ok": True, "recorded": True})
+
+
+@app.route("/api/awareness/status")
+def api_awareness_status():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if not AWARE_OK:
+        return jsonify({"available": False})
+    return jsonify({"available": True, "privacy": privacy.snapshot(), "sandbox": sandbox.isolation_report(),
+                    "window_watcher_supported": window_watcher.supported,
+                    "process_learning": proc_watcher.learning})
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "model": MODEL,
@@ -1437,5 +1559,6 @@ if __name__ == "__main__":
 
     # allow_unsafe_werkzeug: lets VANTA run as a background/login service
     # (no interactive terminal). Safe here because we only bind 127.0.0.1.
+    start_awareness(port)
     socketio.run(app, host="127.0.0.1", port=port, debug=False,
                  allow_unsafe_werkzeug=True)

@@ -47,6 +47,18 @@
   #topbar-right { display: flex; align-items: center; gap: 14px; }
   #voice-toggle { background: #07151b; border: 1px solid #2a7d91; color: #9ff6ff; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.15em; padding: 5px 14px; border-radius: 20px; cursor: pointer; text-transform: uppercase; transition: all 0.3s ease; }
   #voice-toggle:hover { border-color: var(--blue-accent); }
+
+  /* ── Phase 2: watching indicator + nudge toast ── */
+  #watch-ind { display:flex; align-items:center; gap:8px; padding:5px 11px; border-radius:999px; border:1px solid #1B2740; background:#0E1524; color:#8A9AB8; font:500 11px 'JetBrains Mono',monospace; cursor:pointer; letter-spacing:.04em; }
+  #watch-ind:hover { border-color:#2596FF; color:#E8EEF8; }
+  #watch-ind .dot { width:7px; height:7px; border-radius:50%; background:#8A9AB8; }
+  #watch-ind.on .dot { background:#7EC8FF; box-shadow:0 0 8px #2596FF; animation:wpulse 2.4s ease-in-out infinite; }
+  @keyframes wpulse { 50% { opacity:.45; } }
+  #nudge-toast { position:fixed; right:18px; bottom:18px; z-index:9000; width:min(92vw,340px); padding:14px 16px; background:#0E1524; border:1px solid #1B2740; border-left:3px solid #7EC8FF; border-radius:12px; color:#E8EEF8; font:14px/1.45 'DM Sans',system-ui,sans-serif; box-shadow:0 12px 40px rgba(0,0,0,.45); transform:translateY(140%); transition:transform .35s ease; }
+  #nudge-toast.show { transform:translateY(0); }
+  #nudge-toast.medium { border-left-color:#F2B35E; } #nudge-toast.high { border-left-color:#FF6B7A; }
+  #nudge-toast b { display:block; margin-bottom:3px; } #nudge-toast span { color:#8A9AB8; font-size:13px; }
+  #nudge-toast button { margin-top:10px; padding:6px 12px; border:0; border-radius:8px; background:#1B2740; color:#E8EEF8; cursor:pointer; font:600 12px inherit; }
   #status-dot { width: 6px; height: 6px; border-radius: 50%; background: #22d3ee; box-shadow: 0 0 6px #22d3ee; }
 
   #main { flex: 1; display: flex; overflow: hidden; position: relative; }
@@ -197,6 +209,7 @@
   <div id="topbar">
     <div id="topbar-logo">vanta</div>
     <div id="topbar-right">
+      <div id="watch-ind" role="button" tabindex="0" title="Click to pause or resume watching"><span class="dot"></span><span id="watch-label">watching</span></div>
       <button id="voice-toggle">voice mode</button>
       <div id="status-dot"></div>
     </div>
@@ -280,6 +293,8 @@
 
   </div>
 </div>
+
+<div id="nudge-toast" role="status" aria-live="polite"><b id="nudge-title"></b><span id="nudge-msg"></span><br><button id="nudge-ok">Got it</button></div>
 
 <script src="/static/vendor/three.r128.min.js"></script>
 <script src="/static/vendor/socket.io.4.7.2.min.js"></script>
@@ -722,6 +737,30 @@
       }
     } catch (e) { console.error('copy failed', e); }
   }
+
+
+  // ── Phase 2: privacy indicator + nudges ──────────────────────────────────
+  (function(){
+    const ind = document.getElementById('watch-ind'), label = document.getElementById('watch-label');
+    let paused = false;
+    function paint(s){ paused = !!s.paused; const on = s.watching;
+      ind.classList.toggle('on', on); label.textContent = paused ? 'paused' : (on ? 'watching' : 'off'); }
+    socket.on('privacy_state', paint);
+    socket.on('connect', () => socket.emit('privacy_get'));
+    ind.onclick = () => socket.emit('privacy_pause', {paused: !paused});
+    ind.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') ind.click(); };
+
+    const toast = document.getElementById('nudge-toast'); let curId = null, hideT = null;
+    function hide(){ toast.classList.remove('show'); if (curId) socket.emit('nudge_ack', {id: curId}); curId = null; }
+    document.getElementById('nudge-ok').onclick = hide;
+    socket.on('nudge', n => {
+      curId = n.id; toast.className = 'show ' + n.severity;
+      document.getElementById('nudge-title').textContent = n.title;
+      document.getElementById('nudge-msg').textContent = n.message;
+      clearTimeout(hideT); hideT = setTimeout(() => { toast.classList.remove('show'); }, n.severity === 'low' ? 9000 : 30000);
+      if (n.severity !== 'low' && typeof setState === 'function') { const prior = stateName; setState('alert'); setTimeout(() => { if (stateName === 'alert') setState(prior === 'alert' ? 'idle' : prior); }, 3000); }
+    });
+  })();
 
   socket.on('workspace', ({path}) => {
     const header = document.getElementById('workspace-header');

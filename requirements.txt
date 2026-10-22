@@ -20,3 +20,12 @@ feedparser==6.0.0
 # eventlet is intentionally not included: server.py uses async_mode="threading"
 # and the project no longer depends on eventlet.
 psutil>=5.9
+# ── Phase 2 awareness (optional extras; VANTA runs without them) ──
+numpy>=1.26
+opencv-python-headless>=4.9
+mss>=9.0                    # screen frame-diff (opt-in)
+pystray>=0.19               # system-tray watching indicator
+pillow>=10.0
+plyer>=2.1                  # desktop notifications
+pyttsx3>=2.90               # voice nudges (Windows SAPI)
+uiautomation>=2.0; sys_platform == "win32"   # on-demand window text reading
