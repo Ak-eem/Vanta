@@ -24,7 +24,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect
 from flask_socketio import SocketIO, emit
 from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
@@ -126,12 +126,30 @@ if MEMORY_OK:
         vanta_memory.extract_memories(f"My name is {USER}.", source="config")
 
 BASE = Path(__file__).parent
+try:
+    from . import auth
+except ImportError:  # launched as a plain script: python vanta_ui/server.py
+    import auth  # type: ignore
 app  = Flask(__name__, template_folder=str(BASE/"templates"), static_folder=str(BASE/"static"))
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 FLASK_SECRET = os.environ.get("FLASK_SECRET")
 if not FLASK_SECRET:
-    raise RuntimeError("FLASK_SECRET environment variable is required; set it in your environment or .env file.")
+    # Generate once and keep it, so sessions survive restarts and the
+    # background service starts without manual setup.
+    _sf = Path.home() / ".vanta" / "flask_secret"
+    try:
+        FLASK_SECRET = _sf.read_text().strip()
+    except OSError:
+        FLASK_SECRET = ""
+    if not FLASK_SECRET:
+        import secrets as _secrets
+        FLASK_SECRET = _secrets.token_hex(32)
+        _sf.parent.mkdir(parents=True, exist_ok=True)
+        _sf.write_text(FLASK_SECRET)
+        try: os.chmod(_sf, 0o600)
+        except OSError: pass
 app.config["SECRET_KEY"] = FLASK_SECRET
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict")
 socketio = SocketIO(
     app,
     cors_allowed_origins=[
@@ -883,6 +901,9 @@ def parse_file(text: str, sid: str) -> dict:
 
 def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: str,
                              max_attempts: int = 4) -> dict:
+    if not ALLOW_GENERATED_EXECUTION:
+        return {"success": False, "attempts": 0, "last_error":
+                "Generated code execution is disabled (VANTA_ALLOW_GENERATED_EXECUTION)."}
     parsed = parse_code_blocks(first_response)
     if not parsed["saved"]:
         return {"success": False, "reason": "no_code_found"}
@@ -942,9 +963,23 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
+def request_approval(sid: str, action: str, detail: str, timeout: int = 120) -> bool:
+    """Ask the person in the UI before a risky action. Denies on timeout,
+    disconnect, or any error — silence never means yes."""
+    try:
+        reply = socketio.call("approval_request",
+                              {"action": action, "detail": detail[:500]},
+                              to=sid, timeout=timeout)
+        return bool(reply and reply.get("approved") is True)
+    except Exception:
+        return False
+
+
 def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
     if not ALLOW_GENERATED_EXECUTION:
         return "⚠ Generated code execution is disabled. Set VANTA_ALLOW_GENERATED_EXECUTION=true to opt in."
+    if not request_approval(sid, "Run command", cmd):
+        return "⚠ Not run — you didn't approve it."
     for attempt in range(retries):
         try:
             argv = parse_run_command(cmd)
@@ -1010,15 +1045,19 @@ def _run_legal_draft(sid: str, pending: dict):
     socketio.emit("status", {"state": "idle"}, room=sid)
 
 
-def _socket_token_ok() -> bool:
-    expected = os.environ.get("VANTA_TOKEN", "").strip()
-    if not expected:
+def _is_authed() -> bool:
+    """Logged-in browser session, or a valid token supplied with the request."""
+    if session.get("vanta_auth") is True:
         return True
     header = request.headers.get("Authorization", "")
     token = request.args.get("token") or request.headers.get("X-VANTA-TOKEN")
     if header.lower().startswith("bearer "):
         token = header[7:].strip()
-    return token == expected
+    return auth.check(token)
+
+
+def _socket_token_ok() -> bool:
+    return _is_authed()
 
 
 @socketio.on("connect")
@@ -1306,8 +1345,31 @@ def handle_clear():
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  HTTP ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        return render_template("login.html", error=None)
+    client = request.remote_addr or "?"
+    if auth.throttled(client):
+        return render_template("login.html", error="Too many attempts. Wait a few minutes."), 429
+    if auth.check(request.form.get("token")):
+        session.clear()
+        session["vanta_auth"] = True
+        return redirect("/")
+    auth.record_fail(client)
+    return render_template("login.html", error="That token isn't right."), 401
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
 @app.route("/")
 def index():
+    if not _is_authed():
+        return redirect("/login")
     """Render the main UI page.
 
     The template ``index.html`` expects a ``boot_status`` mapping that provides
@@ -1335,6 +1397,8 @@ def index():
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
     f = request.files.get("audio")
     if not f:
         return jsonify({"error": "No audio"}), 400
@@ -1366,6 +1430,8 @@ if __name__ == "__main__":
     print("  VANTA v4 — Natural Intelligence Mode")
     print(f"  http://localhost:{port}")
     print(f"  RAG: {'✓' if RAG_OK else '✗'}  Google: {'✓' if GOOGLE_OK else '✗'}  Orch: {'✓' if ORCH_OK else '✗'}  Watcher: {'✓' if WATCHER_OK else '✗'}")
+    print(f"{'='*55}")
+    print(f"  Access token: {auth.get_token()}   (stored in {auth.TOKEN_FILE})")
     print(f"{'='*55}\n")
 
     if WATCHER_OK:

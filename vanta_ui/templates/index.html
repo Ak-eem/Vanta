@@ -668,6 +668,24 @@
   // ── Backend connection ─────────────────────────────────────────────
   const socket = io();
   window.socket = socket; // exposed for manual testing via DevTools console
+  // ── Approval prompt: risky actions wait for an explicit yes ──────────────
+  socket.on("approval_request", (req, ack) => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:rgba(7,11,20,.78);backdrop-filter:blur(6px)";
+    const box = document.createElement("div");
+    box.style.cssText = "width:min(92vw,460px);padding:24px;background:#0E1524;border:1px solid #1B2740;border-radius:16px;color:#E8EEF8;font:15px/1.5 'DM Sans',system-ui,sans-serif";
+    const h = document.createElement("div"); h.textContent = "VANTA wants to: " + req.action;
+    h.style.cssText = "font-weight:600;margin-bottom:10px;color:#F2B35E";
+    const pre = document.createElement("pre"); pre.textContent = req.detail;
+    pre.style.cssText = "margin:0 0 18px;padding:12px;background:#070B14;border-radius:10px;font:13px 'JetBrains Mono',monospace;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto";
+    const row = document.createElement("div"); row.style.cssText = "display:flex;gap:10px;justify-content:flex-end";
+    const mk = (label, bg, color, val) => { const b = document.createElement("button"); b.textContent = label;
+      b.style.cssText = `padding:10px 18px;border:0;border-radius:10px;cursor:pointer;font-weight:600;background:${bg};color:${color}`;
+      b.onclick = () => { wrap.remove(); ack({approved: val}); }; return b; };
+    row.append(mk("Deny", "#1B2740", "#E8EEF8", false), mk("Approve", "#2596FF", "#fff", true));
+    box.append(h, pre, row); wrap.append(box); document.body.append(wrap);
+  });
+
   let streamBuffer = '';
   let currentMsgMode = 'CHAT';
   const learnIndicator = document.getElementById('learn-indicator');

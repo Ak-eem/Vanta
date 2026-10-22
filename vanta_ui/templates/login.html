@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VANTA — locked</title>
+<style>
+:root{--bg:#070B14;--surface:#0E1524;--border:#1B2740;--text:#E8EEF8;--muted:#8A9AB8;--accent:#7EC8FF;--glow:#2596FF;--danger:#FF6B7A}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(60% 50% at 50% 35%,#0d1d3a 0%,var(--bg) 70%);color:var(--text);font:16px/1.5 "DM Sans",system-ui,sans-serif}
+form{width:min(92vw,360px);padding:32px;background:var(--surface);border:1px solid var(--border);border-radius:16px;text-align:center}
+.orb{width:56px;height:56px;margin:0 auto 18px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff 0%,var(--accent) 25%,var(--glow) 70%);box-shadow:0 0 40px var(--glow)}
+h1{font-size:15px;letter-spacing:.3em;margin:0 0 4px;font-weight:600}
+p{margin:0 0 20px;color:var(--muted);font-size:14px}
+input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font:14px "JetBrains Mono",monospace}
+input:focus{outline:2px solid var(--glow);border-color:transparent}
+button{margin-top:12px;width:100%;padding:12px;border:0;border-radius:10px;background:var(--glow);color:#fff;font-weight:600;cursor:pointer}
+.err{min-height:20px;margin-top:12px;color:var(--danger);font-size:13px}
+</style></head><body>
+<form method="post" action="/login" autocomplete="off">
+  <div class="orb"></div>
+  <h1>VANTA</h1>
+  <p>Enter your access token to continue.</p>
+  <input type="password" name="token" placeholder="Access token" autofocus required>
+  <button type="submit">Unlock</button>
+  <div class="err">{{ error or "" }}</div>
+</form></body></html>
