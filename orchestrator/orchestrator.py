@@ -11,6 +11,9 @@ from typing import Callable, Optional
 from .task_analyzer import analyze_task, should_orchestrate
 from .model_router import get_model_list, get_model_info
 from .pool import GeminiClient, ProviderPool
+from .local_model import LocalClient
+from thinking.formalizer import Form, formalize, clarifying_question, _heuristic
+from thinking.loop import pick_and_run, Result
 from .openrouter_router import OpenRouterClient
 
 
@@ -49,6 +52,14 @@ Instructions:
 """
 
 
+class NeedsClarification(Exception):
+    """Raised when the request is missing something critical; carries the one question to ask."""
+
+    def __init__(self, question: str, form: Form) -> None:
+        super().__init__(question)
+        self.question, self.form = question, form
+
+
 class VantaOrchestrator:
     def __init__(self, groq_client, model: str):
         self.groq = groq_client
@@ -78,7 +89,39 @@ class VantaOrchestrator:
             gemini=GeminiClient.from_env(),
             groq=groq_client,
             groq_model=model,
+            local=LocalClient.from_env(),
         )
+
+    # ── Thinking layer ───────────────────────────────────────────────────
+    def _llm(self, prompt: str, role: str) -> str:
+        """Role-based model access. plan/check -> strong 'brain'; act -> rotating free pool (uncached)."""
+        if role in ("plan", "check"):
+            try:
+                resp = self.merge_client.chat.completions.create(
+                    model=self.merge_model, messages=[{"role": "user", "content": prompt}],
+                    max_tokens=2048, temperature=0.1)
+                text = resp.choices[0].message.content
+                if text and text.strip():
+                    return text
+            except Exception as exc:
+                print(f"[Orchestrator] strong model failed for {role} ({exc}); using free pool")
+        return self.pool.run(prompt, "code", use_cache=False)[0]
+
+    def think(self, task: str, on_step: Optional[Callable] = None, context: str = "") -> Optional[Result]:
+        """Understand -> (ask one question) -> do it -> check with code.
+
+        Returns a Result for code/maths tasks, or None when the request isn't something
+        a program can check (the caller then answers normally). Raises NeedsClarification
+        if something critical is missing."""
+        step = on_step or (lambda *_: None)
+        step("Understanding the request", "thinking")
+        form = formalize(task, self._llm if len(task.split()) >= 6 else None, context)
+        q = clarifying_question(form)
+        if q:
+            raise NeedsClarification(q, form)
+        if form.kind not in ("code", "math"):
+            return None
+        return pick_and_run(task, form, self._llm, on_step=step)
 
     def _get_agent(self) -> "BrowserAgentSync":
         if not BROWSER_OK or BrowserAgentSync is None:

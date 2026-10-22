@@ -162,9 +162,10 @@ class GeminiClient:
 class ProviderPool:
     """Ordered free providers with cache, cooldowns and budgets."""
 
-    def __init__(self, openrouter=None, gemini=None, groq=None, groq_model: str = "",
+    def __init__(self, openrouter=None, gemini=None, groq=None, groq_model: str = "", local=None,
                  cache: Optional[ResponseCache] = None, cooldowns: Cooldowns = COOLDOWNS) -> None:
         self.openrouter, self.gemini, self.groq, self.groq_model = openrouter, gemini, groq, groq_model
+        self.local = local
         self.cache = cache if cache is not None else ResponseCache()
         self.cd = cooldowns
         self.or_rpm = int(os.getenv("OPENROUTER_RPM_LIMIT", "20"))
@@ -172,9 +173,9 @@ class ProviderPool:
         self.gem_rpm = int(os.getenv("GEMINI_RPM_LIMIT", "10"))
         self.gem_daily = int(os.getenv("GEMINI_DAILY_LIMIT", "200"))
 
-    def run(self, prompt: str, task_type: str, on_progress: Optional[Callable] = None) -> tuple[str, str]:
+    def run(self, prompt: str, task_type: str, on_progress: Optional[Callable] = None, use_cache: bool = True) -> tuple[str, str]:
         """Return (text, label). Raises RuntimeError only if every provider is exhausted."""
-        hit = self.cache.get(task_type, prompt)
+        hit = self.cache.get(task_type, prompt) if use_cache else None
         if hit:
             if on_progress:
                 on_progress("cache", "done", hit[0])
@@ -191,6 +192,9 @@ class ProviderPool:
                              self.gem_rpm, self.gem_daily))
         if self.groq is not None:
             attempts.append(("groq", self._groq_call(prompt), None, None))
+        if self.local is not None and self.local.available():
+            # Unlimited and offline, so no budget; weaker, so it goes last.
+            attempts.append(("local", lambda: (self.local.generate(prompt), self.local.model), None, None))
 
         for name, fn, rpm, daily in attempts:
             if not self.cd.available(name, rpm, daily):
@@ -200,7 +204,8 @@ class ProviderPool:
                 self.cd.record_call(name)
                 text, model = fn()
                 self.cd.ok(name)
-                self.cache.put(task_type, prompt, text, model)
+                if use_cache:
+                    self.cache.put(task_type, prompt, text, model)
                 return text, f"{name}:{model}"
             except Exception as exc:
                 wait = self.cd.fail(name, base=30 if "429" not in str(exc) else 90)

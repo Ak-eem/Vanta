@@ -70,10 +70,12 @@ except ImportError:
     GOOGLE_OK = False
 
 try:
-    from orchestrator.orchestrator import VantaOrchestrator
+    from orchestrator.orchestrator import VantaOrchestrator, NeedsClarification
     ORCH_OK = True
 except ImportError:
     ORCH_OK = False
+    class NeedsClarification(Exception):  # placeholder so the gate code still imports
+        question = ""
 
 try:
     from vanta_knowledge import memory as vanta_memory
@@ -1122,6 +1124,12 @@ def handle_chat(data):
             socketio.emit("response", {"text": "⚡ I'm awake. What do you need?"}, room=sid)
             return
 
+    # ── Answer to a clarifying question VANTA just asked ────────────────────
+    if sid in pending_clarify:
+        orig, asked = pending_clarify.pop(sid)
+        if time.time() - asked < 600:
+            msg = f"{orig}\n\nMy answer to your question: {msg}"
+
     # ── Checklist follow-up intercept ───────────────────────────────────────
     if sid in checklist_pending:
         pending = checklist_pending[sid]
@@ -1235,8 +1243,10 @@ def handle_chat(data):
         final = stream_response(sid, ref_msgs, mode, reasoning_effort=effort)
 
     else:
-        # ── Regular query: stream immediately ─────────────────────────────
-        final = stream_response(sid, messages, mode, reasoning_effort=effort, model=routed_model)
+        final = run_thinking(sid, msg) if is_task_request(msg, mode, is_ui) else None
+        if final is None:
+            # ── Regular query: stream immediately ─────────────────────────
+            final = stream_response(sid, messages, mode, reasoning_effort=effort, model=routed_model)
 
     save_history(sid, msg, final)
     compact_history_if_needed(sid)
@@ -1370,6 +1380,51 @@ def on_nudge_ack(data):
 def handle_clear():
     conversations[request.sid] = []
     emit("status", {"state": "idle", "message": "Memory cleared."})
+
+# ── Thinking gate (Phase 3): real tasks get understood, done, and checked with code ──
+THINKING_ON = os.environ.get("VANTA_THINKING", "on").strip().lower() not in {"0", "false", "no", "off"}
+pending_clarify: dict = {}          # sid -> (original request, time asked)
+_MATH_RE = re.compile(r"(\d\s*[\+\-\*/x×^]\s*\d)|(\d\s*%)|\b(calculate|compute|how many|how much|percent|probability|average|sum of|convert)\b", re.I)
+
+
+def is_task_request(msg: str, mode: str, is_ui: bool) -> bool:
+    if not (THINKING_ON and ORCH_OK) or is_ui:
+        return False
+    words = len(msg.split())
+    if mode == "CODE" and words >= 8:
+        return True
+    return bool(_MATH_RE.search(msg)) and any(c.isdigit() for c in msg)
+
+
+def run_thinking(sid: str, msg: str):
+    """Returns the final text (already streamed to the client), or None to use normal chat."""
+    ctx = ""
+    if AWARE_OK:
+        try:
+            ctx = bridge.context_for(msg)
+        except Exception:
+            ctx = ""
+
+    def step(label, _status):
+        socketio.emit("status", {"state": "thinking", "message": label + "…"}, room=sid)
+
+    try:
+        res = orchestrator.think(msg, on_step=step, context=ctx)
+    except NeedsClarification as q:
+        pending_clarify[sid] = (msg, time.time())
+        socketio.emit("stream_chunk", {"chunk": q.question}, room=sid)
+        return q.question
+    except Exception as exc:
+        print(f"[thinking] failed, using normal chat: {exc}")
+        return None
+    if res is None or not res.output:
+        return None
+    note = ("\n\n✓ Checked by running it." if res.verified and res.method != "program"
+            else "" if res.verified else f"\n\n⚠ I couldn't fully verify this. {res.note}")
+    text = res.output + note
+    socketio.emit("stream_chunk", {"chunk": text}, room=sid)
+    return text
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  AWARENESS (Phase 2): privacy, activity log, watchers, nudges, people memory
