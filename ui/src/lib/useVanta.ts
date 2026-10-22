@@ -1,0 +1,178 @@
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { io, Socket } from 'socket.io-client'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage } from '../types'
+import { sanitizeStage } from '../stage/sanitize'
+import { calmError } from './calmError'
+
+export interface State {
+  conn: 'connecting' | 'online' | 'offline'
+  status: 'idle' | 'thinking' | 'learning'
+  statusText: string
+  messages: ChatMessage[]
+  stages: Stage[]
+  activeStageId: string | null
+  pinned: boolean
+  privacy: PrivacyState
+  nudge: Nudge | null
+  approval: Approval | null
+  concernUntil: number
+  errorUntil: number
+  speaking: boolean
+  workspace: { filenames: string[]; run_cmd?: string } | null
+}
+
+type Action =
+  | { t: 'conn'; v: State['conn'] }
+  | { t: 'status'; state: string; message?: string }
+  | { t: 'user'; text: string }
+  | { t: 'chunk'; text: string }
+  | { t: 'done' }
+  | { t: 'say'; text: string; tag?: ChatMessage['tag']; stageId?: string; stageLabel?: string }
+  | { t: 'error'; message: string }
+  | { t: 'stage'; stage: Stage; announce?: boolean }
+  | { t: 'open'; id: string }
+  | { t: 'pin' }
+  | { t: 'clearStage' }
+  | { t: 'privacy'; v: PrivacyState }
+  | { t: 'nudge'; v: Nudge | null }
+  | { t: 'approval'; v: Approval | null }
+  | { t: 'concern'; ms: number }
+  | { t: 'workspace'; v: State['workspace'] }
+
+const uid = () => Math.random().toString(36).slice(2, 9)
+
+export const initial: State = {
+  conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
+  privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null,
+}
+
+export function reducer(s: State, a: Action): State {
+  switch (a.t) {
+    case 'conn': return { ...s, conn: a.v }
+    case 'status': {
+      const st = a.state === 'thinking' || a.state === 'learning' ? a.state : 'idle'
+      return { ...s, status: st, statusText: st === 'idle' ? '' : a.message ?? '' }
+    }
+    case 'user': return { ...s, messages: [...s.messages, { id: uid(), role: 'user', text: a.text }] }
+    case 'chunk': {
+      const last = s.messages[s.messages.length - 1]
+      if (last && last.role === 'vanta' && last.streaming)
+        return { ...s, speaking: true, messages: [...s.messages.slice(0, -1), { ...last, text: last.text + a.text }] }
+      return { ...s, speaking: true, messages: [...s.messages, { id: uid(), role: 'vanta', text: a.text, streaming: true }] }
+    }
+    case 'done': {
+      const last = s.messages[s.messages.length - 1]
+      const msgs = last?.streaming ? [...s.messages.slice(0, -1), { ...last, streaming: false }] : s.messages
+      return { ...s, speaking: false, messages: msgs }
+    }
+    case 'say': return { ...s, messages: [...s.messages, { id: uid(), role: 'vanta', text: a.text, tag: a.tag, stageId: a.stageId, stageLabel: a.stageLabel }] }
+    case 'error': {
+      const e = calmError(a.message)
+      return {
+        ...s, speaking: false, status: 'idle', errorUntil: Date.now() + 8000,
+        messages: [...s.messages.map((m) => ({ ...m, streaming: false })), { id: uid(), role: 'vanta', text: e.text, tag: 'error' }],
+      }
+    }
+    case 'stage': {
+      const stages = [a.stage, ...s.stages.filter((x) => x.id !== a.stage.id)].slice(0, 12)
+      const takeOver = !s.pinned || s.activeStageId === a.stage.id || !s.activeStageId
+      return { ...s, stages, activeStageId: takeOver ? a.stage.id : s.activeStageId }
+    }
+    case 'open': return { ...s, activeStageId: a.id }
+    case 'pin': return { ...s, pinned: !s.pinned }
+    case 'clearStage': return { ...s, activeStageId: null, pinned: false }
+    case 'privacy': return { ...s, privacy: a.v }
+    case 'nudge': return { ...s, nudge: a.v }
+    case 'approval': return { ...s, approval: a.v }
+    case 'concern': return { ...s, concernUntil: Date.now() + a.ms }
+    case 'workspace': return { ...s, workspace: a.v }
+  }
+}
+
+export function sphereState(s: State, now = Date.now()): SphereState {
+  if (s.conn !== 'online') return 'sleeping'
+  if (s.errorUntil > now) return 'error'
+  if (s.concernUntil > now) return 'alert'
+  if (s.speaking) return 'speaking'
+  if (s.status === 'thinking') return 'thinking'
+  if (s.status === 'learning') return 'learning'
+  return 'idle'
+}
+
+export function useVanta() {
+  const [state, dispatch] = useReducer(reducer, initial)
+  const sock = useRef<Socket | null>(null)
+  const [, tick] = useReducer((n: number) => n + 1, 0)
+
+  useEffect(() => {
+    const socket = io({ transports: ['websocket', 'polling'] })
+    sock.current = socket
+    socket.on('connect', () => { dispatch({ t: 'conn', v: 'online' }); socket.emit('privacy_get') })
+    socket.on('disconnect', () => dispatch({ t: 'conn', v: 'offline' }))
+    socket.on('connect_error', (err) => {
+      dispatch({ t: 'conn', v: 'offline' })
+      if (/xhr poll error|unauthor|403|401/i.test(String(err?.message)) && !socket.active) window.location.href = '/login'
+    })
+    socket.on('status', (d: { state: string; message?: string }) => dispatch({ t: 'status', state: d.state, message: d.message }))
+    socket.on('stream_chunk', (d: { chunk: string }) => dispatch({ t: 'chunk', text: d.chunk }))
+    socket.on('stream_done', () => dispatch({ t: 'done' }))
+    socket.on('response', (d: { text: string }) => dispatch({ t: 'say', text: d.text }))
+    socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
+    socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
+    socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
+    socket.on('nudge', (d: Nudge) => {
+      dispatch({ t: 'nudge', v: d })
+      if (d.severity !== 'low') dispatch({ t: 'concern', ms: 12000 })
+    })
+    socket.on('approval_request', (req: { action: string; detail: string }, ack: Approval['ack']) =>
+      dispatch({ t: 'approval', v: { action: req.action, detail: req.detail, ack } }))
+    socket.on('stage', (raw: unknown) => {
+      const stage = sanitizeStage(raw)
+      if (!stage) return
+      dispatch({ t: 'stage', stage })
+      if (stage.summary)
+        dispatch({ t: 'say', text: stage.summary, tag: stage.blocks.some((b) => b.tone === 'warn' || b.tone === 'danger') ? 'heads-up' : undefined, stageId: stage.id, stageLabel: stage.title })
+    })
+    socket.on('alert', (d: { severity?: string; title: string; message: string }) => {
+      const stage = sanitizeStage({
+        id: `alert-${Date.now()}`, title: String(d.title).slice(0, 60), layout: 'single',
+        blocks: [
+          { id: 'what', type: 'text', title: 'What I noticed', tone: d.severity === 'high' ? 'danger' : 'warn', data: { body: d.message } },
+          { id: 'rec', type: 'recommendation', data: { title: 'Worth a look', reason: "I haven't changed anything. Tell me if you want me to dig deeper." } },
+        ],
+        actions: [{ id: `ask:Explain what you noticed about: ${d.title}. Is it safe, and what should I do?`, label: 'Show me why', kind: 'primary' }, { id: 'dismiss', label: 'Ignore once', kind: 'ghost' }],
+        summary: `${d.title}. I put what I found on the stage.`,
+      })
+      if (stage) { dispatch({ t: 'stage', stage }); dispatch({ t: 'say', text: stage.summary!, tag: 'heads-up', stageId: stage.id, stageLabel: stage.title }); dispatch({ t: 'concern', ms: 12000 }) }
+    })
+    socket.on('weather_card', (d: { temp: number; condition: string; city: string }) => {
+      const stage = sanitizeStage({
+        id: 'weather', title: `Weather · ${d.city}`, blocks: [{ id: 'w', type: 'weather', data: d }],
+      })
+      if (stage) dispatch({ t: 'stage', stage })
+    })
+    const timer = window.setInterval(() => tick(), 1000) // lets time-boxed states (alert/error) expire
+    return () => { window.clearInterval(timer); socket.close() }
+  }, [])
+
+  const send = useCallback((text: string) => {
+    const t = text.trim()
+    if (!t) return
+    dispatch({ t: 'user', text: t })
+    sock.current?.emit('chat', { message: t, think: false })
+  }, [])
+  const api = useMemo(() => ({
+    send,
+    pause: (paused: boolean) => sock.current?.emit('privacy_pause', { paused }),
+    setSource: (name: string, enabled: boolean) => sock.current?.emit('privacy_source', { name, enabled }),
+    ackNudge: (id: string) => { sock.current?.emit('nudge_ack', { id }); dispatch({ t: 'nudge', v: null }) },
+    answerApproval: (approved: boolean, a: Approval) => { a.ack({ approved }); dispatch({ t: 'approval', v: null }) },
+    openStage: (id: string) => dispatch({ t: 'open', id }),
+    pinStage: () => dispatch({ t: 'pin' }),
+    clearStage: () => dispatch({ t: 'clearStage' }),
+    stageAction: (stageId: string, actionId: string) => sock.current?.emit('stage_action', { stage: stageId, action: actionId }),
+    dispatch,
+  }), [send])
+  return { state, api }
+}

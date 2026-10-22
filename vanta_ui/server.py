@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1199,6 +1200,8 @@ def handle_chat(data):
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode, has_history)
     routed_model = pick_model(effort)
     messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    if wants_stage(msg):
+        messages[0]["content"] += "\n\n" + STAGE_PROMPT
     if AWARE_OK:
         try:
             bridge.note_claims(msg)
@@ -1248,6 +1251,10 @@ def handle_chat(data):
             # ── Regular query: stream immediately ─────────────────────────
             final = stream_response(sid, messages, mode, reasoning_effort=effort, model=routed_model)
 
+    clean_final, model_stage = parse_model_stage(final)
+    if model_stage:
+        socketio.emit("stage", model_stage, room=sid)
+        final = clean_final
     save_history(sid, msg, final)
     compact_history_if_needed(sid)
     socketio.emit("stream_done", {"model": MODEL, "mode": mode}, room=sid)
@@ -1352,6 +1359,15 @@ def handle_orchestrate(data):
     finally:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
+@socketio.on("stage_action")
+def on_stage_action(data):
+    """Buttons on stage cards. Today only chat shortcuts (ask:) and dismiss exist client-side;
+    anything else is acknowledged calmly rather than silently ignored."""
+    sid = request.sid
+    print(f"[stage] action {data!r}")
+    socketio.emit("response", {"text": "I can't do that one yet. For now I can look into it and tell you what I find."}, room=sid)
+
+
 @socketio.on("privacy_get")
 def on_privacy_get():
     if AWARE_OK:
@@ -1423,6 +1439,12 @@ def run_thinking(sid: str, msg: str):
             else "" if res.verified else f"\n\n⚠ I couldn't fully verify this. {res.note}")
     text = res.output + note
     socketio.emit("stream_chunk", {"chunk": text}, room=sid)
+    try:
+        st = code_result_stage(msg, res.output, res.verified, res.method, len(res.attempts) or 1)
+        if st:
+            socketio.emit("stage", st, room=sid)
+    except Exception as exc:
+        print(f"[stage] code stage failed: {exc}")
     return text
 
 
@@ -1512,10 +1534,36 @@ def logout():
     return redirect("/login")
 
 
+UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+
+
+@app.route("/app/<path:filename>")
+def ui_assets(filename):
+    """Built React UI assets (hashed filenames, nothing secret in them)."""
+    from flask import send_from_directory
+    return send_from_directory(UI_DIST, filename)
+
+
 @app.route("/")
 def index():
     if not _is_authed():
         return redirect("/login")
+    if (UI_DIST / "index.html").exists() and request.args.get("classic") is None:
+        from flask import send_from_directory
+        resp = send_from_directory(UI_DIST, "index.html")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    return classic_index()
+
+
+@app.route("/classic")
+def classic():
+    if not _is_authed():
+        return redirect("/login")
+    return classic_index()
+
+
+def classic_index():
     """Render the main UI page.
 
     The template ``index.html`` expects a ``boot_status`` mapping that provides
