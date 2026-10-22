@@ -30,6 +30,7 @@ from groq import Groq, AuthenticationError
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import sandbox
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -916,14 +917,11 @@ def stage_test_and_finalize(task: str, first_response: str, system_for_fixes: st
         for attempt in range(1, max_attempts + 1):
             try:
                 argv = parse_run_command(run_cmd)
-                result = subprocess.run(
-                    argv, shell=False, cwd=str(staging_dir),
-                    capture_output=True, text=True, timeout=30,
-                )
+                result = sandbox.run(argv, cwd=str(staging_dir), timeout=30, allow_network=False)
             except ValueError as exc:
                 return {"success": False, "attempts": attempt,
                         "error": f"Unsafe RUN command rejected: {exc}"}
-            except subprocess.TimeoutExpired:
+            if result.timed_out:
                 write_and_open(filenames, codes, WORKSPACE)
                 return {"success": True, "attempts": attempt, "note": "long_running",
                         "filenames": filenames, "codes": codes, "run_cmd": run_cmd, "log": log}
@@ -983,10 +981,9 @@ def run_cmd(cmd: str, sid: str, retries: int = 4) -> str:
     for attempt in range(retries):
         try:
             argv = parse_run_command(cmd)
-            proc = subprocess.run(
-                argv, shell=False, capture_output=True,
-                text=True, timeout=30, cwd=WORKSPACE,
-            )
+            proc = sandbox.run(argv, cwd=WORKSPACE, timeout=30, allow_network=True)
+            if proc.timed_out:
+                return "⚠ Timed out."
             if proc.returncode == 0:
                 return proc.stdout or "✓ Done."
             if attempt < retries - 1:
