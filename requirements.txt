@@ -19,3 +19,4 @@ feedparser==6.0.0
 # ── Utilities ─────────────────────────────────────────────────
 # eventlet is intentionally not included: server.py uses async_mode="threading"
 # and the project no longer depends on eventlet.
+psutil>=5.9
