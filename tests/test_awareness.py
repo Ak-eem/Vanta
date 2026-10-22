@@ -89,3 +89,36 @@ def test_frame_diff():
     assert r and not r["first"]
     x, y, w, h = r["bbox"]
     assert 780 <= x <= 820 and 280 <= y <= 320 and 580 <= w <= 640 and 280 <= h <= 340
+
+# ── people + memory bridge ─────────────────────────────────────────────────
+from vanta_knowledge.people import People
+from awareness.memory_bridge import MemoryBridge
+
+def test_people_claims_and_context():
+    d, pr, log = mk()
+    pe = People(d / "p.db")
+    pe.add_person("Ada", relation="girlfriend", aliases=["babe"])
+    pe.add_claim("Ada", "lives alone", source="she told you")
+    ctx = pe.context_for("someone walked behind my girlfriend on the call")
+    assert "lives alone" in ctx and "TOLD" in ctx
+    old = pe.claims_for("ada")[0]["id"]
+    pe.supersede(old, "Ada", "lives with a flatmate")
+    assert [c["text"] for c in pe.claims_for("Ada")] == ["lives with a flatmate"]
+    assert len(pe.claims_for("Ada", include_old=True)) == 2
+    assert pe.forget_person("Ada") and not pe.claims_for("Ada")
+
+def test_capture():
+    d, pr, log = mk(); pe = People(d / "p.db")
+    ids = pe.capture("Ada said that she lives alone. Also my brother told me he moved to Lagos.")
+    assert len(ids) == 2
+    assert pe.claims_for("Ada")[0]["text"].startswith("she lives alone")
+    assert pe.capture("she said hi there everyone") == []
+
+def test_bridge_gating():
+    d, pr, log = mk(); pe = People(d / "p.db")
+    log.add("window", "focus", app="code.exe", title="main.py")
+    b = MemoryBridge(log, pe)
+    assert "code.exe" not in b.context_for("write me a poem")          # not asked -> not shared
+    assert "code.exe" in b.context_for("what was I doing a minute ago?")
+    pr.set_paused(True)
+    assert "code.exe" not in b.context_for("what was I doing a minute ago?")
