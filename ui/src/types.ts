@@ -1,5 +1,7 @@
 export type SphereState = 'idle' | 'thinking' | 'speaking' | 'learning' | 'sleeping' | 'error' | 'alert'
-export type LayoutMode = 'single' | 'compact' | 'investigation'
+/** orbit = unrelated items float around the sphere; connected = related items linked with lines.
+ *  single/compact/investigation are older names, still accepted. */
+export type LayoutMode = 'orbit' | 'connected' | 'single' | 'compact' | 'investigation'
 export type BlockType =
   | 'text' | 'node' | 'news' | 'chart' | 'code' | 'table' | 'image'
   | 'steps' | 'svg' | 'html' | 'weather' | 'recommendation'
@@ -39,3 +41,8 @@ export interface ChatMessage {
 export interface PrivacyState { paused: boolean; watching: boolean; sources: Record<string, boolean> }
 export interface Nudge { id: string; severity: 'low' | 'medium' | 'high'; title: string; message: string }
 export interface Approval { action: string; detail: string; ack: (reply: { approved: boolean }) => void }
+
+export interface Telemetry {
+  cpu: number; mem: number; down: number; up: number; procs: number
+  battery: { pct: number; plugged: boolean } | null; idle: boolean; app?: string; title?: string
+}

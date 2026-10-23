@@ -1509,6 +1509,22 @@ def start_awareness(port: int) -> None:
             time.sleep(30)
     threading.Thread(target=_housekeeping, name="vanta-housekeeping", daemon=True).start()
 
+    def _telemetry_loop():
+        from vanta_ui.telemetry import Telemetry
+        tel = Telemetry()
+        while True:
+            time.sleep(2)
+            try:
+                if not conversations:          # nobody is looking; don't spend CPU
+                    continue
+                win = window_watcher.current() if window_watcher else None
+                if win and not privacy.allows("window", win[0], win[1]):
+                    win = None
+                socketio.emit("telemetry", tel.sample(window=win, idle=False))
+            except Exception as exc:
+                print(f"[telemetry] {exc}")
+    threading.Thread(target=_telemetry_loop, name="vanta-telemetry", daemon=True).start()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ██  HTTP ROUTES

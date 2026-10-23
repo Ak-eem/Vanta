@@ -1,9 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { SphereEngine } from './SphereEngine'
 import type { SphereState } from '../types'
+import type { SphereSpot } from '../stage/layout'
 
-/** React only mounts the canvas and forwards state; every frame runs inside SphereEngine, outside React. */
-export function Sphere({ state, amplitude = 0, size = 150 }: { state: SphereState; amplitude?: number; size?: number }) {
+const BOX = 440      // the sphere plus its rings are drawn in a 440px box, then scaled to fit
+const CANVAS = 340
+
+/** React mounts the canvas and forwards state; every frame runs inside SphereEngine, outside React.
+ *  Moving/resizing is a CSS transform, so the sphere glides between layouts without re-rendering WebGL. */
+export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState; amplitude?: number; spot: SphereSpot; low: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const engine = useRef<SphereEngine | null>(null)
 
@@ -11,25 +16,32 @@ export function Sphere({ state, amplitude = 0, size = 150 }: { state: SphereStat
     const el = canvas.current
     if (!el) return
     let eng: SphereEngine
-    try {
-      const low = (navigator.hardwareConcurrency ?? 4) <= 4
-      eng = new SphereEngine(el, low)
-    } catch {
-      return // no WebGL: the CSS fallback orb below stays visible
-    }
+    try { eng = new SphereEngine(el, low || (navigator.hardwareConcurrency ?? 4) <= 4) } catch { return }
     engine.current = eng
-    eng.resize(size, size)
+    eng.resize(CANVAS, CANVAS)
+    eng.setState(state)
     eng.start()
     const onVis = () => (document.hidden ? eng.stop() : eng.start())
     document.addEventListener('visibilitychange', onVis)
     return () => { document.removeEventListener('visibilitychange', onVis); eng.dispose(); engine.current = null }
-  }, [size])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [low])
 
   useEffect(() => { engine.current?.setState(state) }, [state])
   useEffect(() => { engine.current?.setAmplitude(amplitude) }, [amplitude])
 
+  const scale = spot.size / BOX
   return (
-    <div className={`sphere sphere-${state}`} style={{ width: size, height: size }} aria-hidden="true">
+    <div className={`sphere sphere-${state}`} aria-hidden="true"
+      style={{ transform: `translate(${spot.cx - spot.size / 2}px, ${spot.cy - spot.size / 2}px) scale(${scale})` }}>
+      <svg className="rings" viewBox="0 0 440 440" width={BOX} height={BOX}>
+        <circle className="r-glow" cx="220" cy="220" r="214" />
+        <circle className="r-ticks" cx="220" cy="220" r="206" />
+        <circle className="r-arcs" cx="220" cy="220" r="192" />
+        <circle className="r-thin" cx="220" cy="220" r="176" />
+        <circle className="r-arcs2" cx="220" cy="220" r="184" />
+        {[0, 90, 180, 270].map((a) => <line key={a} className="r-cross" x1="220" y1="2" x2="220" y2="16" transform={`rotate(${a} 220 220)`} />)}
+      </svg>
       <div className="sphere-fallback" />
       <canvas ref={canvas} />
     </div>

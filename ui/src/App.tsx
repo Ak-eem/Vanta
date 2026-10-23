@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Sphere, STATE_LABEL } from './components/Sphere'
+import { STATE_LABEL } from './components/Sphere'
+import { Readouts } from './components/Readouts'
+import { readPref, useHudMode, writePref, type LayoutPref } from './lib/hudMode'
+import { useFx } from './lib/useFx'
 import { ChatList, Composer } from './components/Chat'
 import { ApprovalModal, NudgeToast, SettingsDrawer } from './components/Overlays'
 import { StageView } from './stage/StageView'
@@ -21,9 +24,14 @@ export default function App() {
   const [tab, setTab] = useState<'chat' | 'stage'>('chat')
   const [settings, setSettings] = useState(false)
   const [unseen, setUnseen] = useState(false)
+  const [pref, setPrefState] = useState<LayoutPref>(readPref)
+  const [fx, setFx, fxAuto] = useFx()
+  const setPref = (v: LayoutPref) => { writePref(v); setPrefState(v) }
 
   const sphere = sphereState(state)
   const stage = useMemo(() => state.stages.find((s) => s.id === state.activeStageId) ?? null, [state.stages, state.activeStageId])
+  const busy = state.status !== 'idle' || sphere === 'alert' || sphere === 'speaking'
+  const hud = useHudMode(pref, !!stage || busy)
   const on = Object.entries(state.privacy.sources).filter(([, v]) => v).map(([k]) => NAMES[k] ?? k)
   const watching = state.privacy.watching && !state.privacy.paused
   const pillText = state.privacy.paused ? 'Paused' : on.length ? `Watching: ${on.join(', ')}` : 'Not watching'
@@ -40,7 +48,7 @@ export default function App() {
   const sensesLine = `Senses: ${on.filter((n) => n !== 'screen').join(' · ') || 'none'}  |  Screen: ${state.privacy.sources.screen ? 'on' : 'off'}`
 
   return (
-    <div className="app">
+    <div className="app" data-hud={hud ? 'on' : 'off'}>
       <header className="topbar">
         <span className="wordmark">VANTA</span>
         <div className="top-right">
@@ -53,8 +61,7 @@ export default function App() {
       </header>
 
       <aside className="rail" data-hidden={phone && tab !== 'chat'}>
-        <Sphere state={sphere} size={phone ? 96 : 150} />
-        <div className={`state-label ${sphere}`}>{STATE_LABEL[sphere]}</div>
+        {phone ? <div className={`state-label ${sphere}`}>{STATE_LABEL[sphere]}</div> : null}
         <div className="status-line">{state.statusText}</div>
         <ChatList messages={state.messages} onOpenStage={openStage} />
         <Composer onSend={api.send} disabled={state.conn !== 'online'} onVoiceError={(m) => api.dispatch({ t: 'error', message: m })} />
@@ -62,7 +69,9 @@ export default function App() {
       </aside>
 
       <div style={{ gridArea: phone ? 'main' : 'stage', display: phone && tab !== 'stage' ? 'none' : 'flex', minHeight: 0, minWidth: 0 }}>
-        <StageView stage={stage} history={state.stages} pinned={state.pinned} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
+        <StageView stage={stage} history={state.stages} pinned={state.pinned} sphere={sphere} amplitude={sphere === 'speaking' ? 0.5 : 0} low={fx === 'low'}
+          caption={hud && state.tel?.app ? `Watching with you: ${state.tel.app}` : undefined}
+          footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>
 
       {phone && (
@@ -72,7 +81,8 @@ export default function App() {
         </nav>)}
 
       {state.conn === 'offline' && <div className="offline-bar" role="status">Reconnecting… I'll be right back.</div>}
-      <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)} />
+      <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)}
+        layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
       <NudgeToast nudge={state.nudge} onAck={api.ackNudge} />
       <ApprovalModal approval={state.approval} onAnswer={api.answerApproval} />
     </div>)

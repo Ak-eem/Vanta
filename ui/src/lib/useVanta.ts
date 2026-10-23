@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage } from '../types'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, Telemetry } from '../types'
 import { sanitizeStage } from '../stage/sanitize'
 import { calmError } from './calmError'
 
@@ -19,6 +19,7 @@ export interface State {
   errorUntil: number
   speaking: boolean
   workspace: { filenames: string[]; run_cmd?: string } | null
+  tel: Telemetry | null
 }
 
 type Action =
@@ -38,13 +39,14 @@ type Action =
   | { t: 'approval'; v: Approval | null }
   | { t: 'concern'; ms: number }
   | { t: 'workspace'; v: State['workspace'] }
+  | { t: 'tel'; v: unknown }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null,
 }
 
 export function reducer(s: State, a: Action): State {
@@ -87,6 +89,16 @@ export function reducer(s: State, a: Action): State {
     case 'approval': return { ...s, approval: a.v }
     case 'concern': return { ...s, concernUntil: Date.now() + a.ms }
     case 'workspace': return { ...s, workspace: a.v }
+    case 'tel': {
+      const t = a.v as Partial<Telemetry> | null
+      if (!t || typeof t !== 'object') return s
+      const n = (x: unknown) => (typeof x === 'number' && isFinite(x) ? x : 0)
+      const b = t.battery && typeof t.battery === 'object' ? { pct: n(t.battery.pct), plugged: !!t.battery.plugged } : null
+      return { ...s, tel: {
+        cpu: n(t.cpu), mem: n(t.mem), down: n(t.down), up: n(t.up), procs: n(t.procs), battery: b, idle: !!t.idle,
+        app: typeof t.app === 'string' ? t.app.slice(0, 40) : undefined, title: typeof t.title === 'string' ? t.title.slice(0, 80) : undefined,
+      } }
+    }
   }
 }
 
@@ -121,6 +133,7 @@ export function useVanta() {
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
+    socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {
       dispatch({ t: 'nudge', v: d })
       if (d.severity !== 'low') dispatch({ t: 'concern', ms: 12000 })

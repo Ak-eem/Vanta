@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect } from 'react'
 import type { Approval, Nudge, PrivacyState } from '../types'
+import type { LayoutPref } from '../lib/hudMode'
+import type { Fx } from '../lib/useFx'
 
 export function NudgeToast({ nudge, onAck }: { nudge: Nudge | null; onAck: (id: string) => void }) {
   useEffect(() => {
@@ -37,7 +39,12 @@ const SOURCES: { key: string; label: string; hint: string }[] = [
   { key: 'screen', label: 'Screen changes', hint: 'Notices when the screen changes. Pixels are never saved.' },
 ]
 
-export function SettingsDrawer({ open, privacy, onSource, onClose }: { open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void }) {
+const LOOKS: { v: LayoutPref; label: string }[] = [{ v: 'auto', label: 'Auto' }, { v: 'calm', label: 'Calm' }, { v: 'hud', label: 'HUD' }]
+
+export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx }: {
+  open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void
+  layout: LayoutPref; onLayout: (v: LayoutPref) => void; fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
+}) {
   return (
     <AnimatePresence>
       {open ? (
@@ -49,6 +56,13 @@ export function SettingsDrawer({ open, privacy, onSource, onClose }: { open: boo
               <div>{s.label}<small>{s.hint}</small></div>
               <button className="switch" role="switch" aria-label={s.label} aria-checked={!!privacy.sources[s.key]} onClick={() => onSource(s.key, !privacy.sources[s.key])} />
             </div>))}
+          <h3 style={{ marginTop: 22 }}>How it looks</h3>
+          <p>Auto keeps things calm while we chat and switches to the full HUD when there is something to show or I am working.</p>
+          <div className="seg" role="radiogroup" aria-label="Layout">
+            {LOOKS.map((l) => <button key={l.v} role="radio" aria-checked={layout === l.v} onClick={() => onLayout(l.v)}>{l.label}</button>)}
+          </div>
+          <div className="toggle"><div>Light effects<small>{fxAuto ? 'Turned on because this screen was struggling.' : 'Fewer glows and animations. Easier on an older laptop.'}</small></div>
+            <button className="switch" role="switch" aria-label="Light effects" aria-checked={fx === 'low'} onClick={() => onFx(fx === 'low' ? 'full' : 'low')} /></div>
           <div className="toggle"><div>Sign out<small>Locks VANTA in this browser.</small></div><a className="btn sm" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }} href="/logout">Sign out</a></div>
         </motion.aside>) : null}
     </AnimatePresence>)
