@@ -57,3 +57,29 @@ def test_wrong_passphrase_rejected(tmp_path, monkeypatch):
     Sync.unlock(store, "right")
     with pytest.raises(crypto.WrongPassphrase):
         Sync.unlock(store, "wrong")
+
+
+def test_phone_chat_gets_answered_and_reply_syncs_back(tmp_path, monkeypatch):
+    import time
+    from vanta_sync.service import SyncService
+    import vanta_sync.service as S
+    monkeypatch.setattr(crypto.derive_key, "__defaults__", (1000,))
+    monkeypatch.setattr(S, "STATE", tmp_path / "st.json")
+    store = FolderStore(tmp_path / "cloud.json")
+    p, n = People(tmp_path / "p.db"), Notes(tmp_path / "n.db")
+    seen = []
+    svc = SyncService(p.path, n.path, n, lambda t: None, lambda s: None, store=store, reply=lambda t: seen.append(t) or f"echo: {t}")
+    svc.unlock("long enough pw")
+    _, pn, ps = device(tmp_path, "phone", store, "long enough pw")
+    pn.add_chat("user", "what's the weather like?")
+    ps.run()
+    svc.run_once()
+    for _ in range(50):
+        if not svc._busy and any(c["role"] == "assistant" for c in n.chats()):
+            break
+        time.sleep(0.05)
+    svc.run_once(); ps.run()
+    chats = pn.chats()
+    assert [c["role"] for c in chats] == ["user", "assistant"] and chats[1]["text"] == "echo: what's the weather like?"
+    assert seen == ["what's the weather like?"]
+    assert "weather" not in (tmp_path / "cloud.json").read_text()

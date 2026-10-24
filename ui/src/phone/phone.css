@@ -11,8 +11,15 @@ body { overflow: auto; }
 .ph-meta { display: flex; align-items: center; justify-content: space-between; font: 500 11px var(--mono); letter-spacing: .14em; color: var(--muted); min-height: 28px; }
 .ph-msg { color: var(--accent); font-size: 13px; } .ph-empty { color: var(--muted); text-align: center; margin: 24px 0; line-height: 22px; }
 .ph-err { color: #E7A3AB; font-size: 14px; line-height: 20px; }
-.ph-tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; height: calc(56px + env(safe-area-inset-bottom)); }
+.ph-tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(3, 1fr); height: calc(56px + env(safe-area-inset-bottom)); }
 .ph-setup { max-width: 440px; margin: 0 auto; padding: 32px 20px calc(32px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
 .ph-setup h1 { margin: 0; font-size: 24px; } .ph-setup p { margin: 0; color: var(--muted); line-height: 22px; }
 .ph-setup label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); } .ph-setup label small { font-size: 12px; line-height: 17px; }
 .orb { width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 4px; background: radial-gradient(circle at 35% 30%, #fff 0, var(--accent) 28%, var(--glow) 72%); box-shadow: 0 0 40px rgba(37,150,255,.5); }
+
+.ph-body { padding-bottom: 150px; }
+.ph-bubble { max-width: 86%; padding: 10px 14px; border-radius: 16px 16px 16px 4px; background: var(--surface); border: 1px solid var(--border); line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
+.ph-bubble.user { align-self: flex-end; border-radius: 16px 16px 4px 16px; background: var(--surface-2); border-color: var(--border-2); }
+.ph-bubble.wait { color: var(--muted); font-size: 13px; }
+.ph-compose { position: fixed; left: 0; right: 0; bottom: calc(56px + env(safe-area-inset-bottom)); display: flex; gap: 8px; padding: 10px 16px; background: var(--bg); border-top: 1px solid var(--border); }
+.ph-compose input { flex: 1; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border-2); border-radius: 12px; padding: 0 14px; font: 16px var(--sans); height: 44px; }

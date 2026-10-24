@@ -16,6 +16,7 @@ class Notes:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._c() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, role TEXT, text TEXT, reply_to TEXT, created REAL, updated_at REAL, device_id TEXT, deleted INTEGER DEFAULT 0)")
             c.execute("CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, text TEXT, kind TEXT, created REAL, updated_at REAL, device_id TEXT, deleted INTEGER DEFAULT 0)")
 
     def _c(self) -> sqlite3.Connection:
@@ -36,3 +37,20 @@ class Notes:
     def all(self) -> list[dict]:
         with self._c() as c:
             return [dict(r) for r in c.execute("SELECT * FROM notes WHERE deleted=0 ORDER BY created DESC")]
+
+    # ── phone chat: text-only conversation carried by sync ───────────────
+    def add_chat(self, role: str, text: str, reply_to: str = "") -> str:
+        cid, now = str(uuid.uuid4()), time.time()
+        with self._c() as c:
+            c.execute("INSERT INTO chats VALUES(?,?,?,?,?,?,?,0)", (cid, role, text.strip()[:4000], reply_to, now, now, DEVICE))
+        return cid
+
+    def chats(self, limit: int = 200) -> list[dict]:
+        with self._c() as c:
+            rows = [dict(r) for r in c.execute("SELECT * FROM chats WHERE deleted=0 ORDER BY created DESC LIMIT ?", (limit,))]
+        return rows[::-1]
+
+    def unanswered(self) -> list[dict]:
+        rows = self.chats()
+        answered = {r["reply_to"] for r in rows if r["role"] == "assistant"}
+        return [r for r in rows if r["role"] == "user" and r["id"] not in answered]

@@ -38,8 +38,9 @@ export default function PhoneApp() {
   const [, setCfg] = useState<Cfg | null>(readCfg)
   const [ready, setReady] = useState(false)
   const [data, setData] = useState<Data | null>(null)
-  const [tab, setTab] = useState<'notes' | 'people'>('notes')
-  const [text, setText] = useState(''), [msg, setMsg] = useState('')
+  const [tab, setTab] = useState<'chat' | 'notes' | 'people'>('chat')
+  const [text, setText] = useState(''), [msg, setMsg] = useState(''), [draft, setDraft] = useState('')
+  const end = useRef<HTMLDivElement>(null)
   const cloud = useRef<Cloud | null>(null), key = useRef<CryptoKey | null>(null)
 
   const refresh = useCallback(async () => {
@@ -73,6 +74,21 @@ export default function PhoneApp() {
     if (!text.trim() || !cloud.current || !key.current) return
     try { await cloud.current.saveNote(key.current, text, kind); setText(''); setMsg(kind === 'ask' ? 'Sent. Your laptop will pick it up.' : 'Saved.'); refresh() } catch (e) { setMsg(e instanceof Error ? e.message : 'Could not save') }
   }
+  const sendChat = async () => {
+    if (!draft.trim() || !cloud.current || !key.current) return
+    const t = draft; setDraft('')
+    try { await cloud.current.sendChat(key.current, t); refresh() } catch (e) { setMsg(e instanceof Error ? e.message : 'Could not send'); setDraft(t) }
+  }
+  const chats = data?.chats ?? []
+  const last = chats[chats.length - 1]
+  const waiting = !!last && last.role === 'user'
+  // While a reply is pending (or the chat tab is open) check for it every few seconds.
+  useEffect(() => {
+    if (!ready || tab !== 'chat') return
+    const id = window.setInterval(() => { if (!document.hidden) refresh() }, waiting ? 3000 : 10000)
+    return () => window.clearInterval(id)
+  }, [ready, tab, waiting, refresh])
+  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }) }, [chats.length])
   const del = async (n: Note) => { if (cloud.current && key.current) { await cloud.current.deleteNote(key.current, n); refresh() } }
 
   const claimsBy = useMemo(() => {
@@ -86,7 +102,13 @@ export default function PhoneApp() {
     <div className="ph">
       <header className="ph-top"><span className="wordmark">VANTA</span><button className="btn ghost sm" onClick={lock}>Lock</button></header>
       <div className="ph-body">
-        {tab === 'notes' ? (<>
+        {tab === 'chat' ? (<>
+          {chats.map((c) => <div key={c.id} className={`ph-bubble ${c.role}`}>{c.text}</div>)}
+          {!chats.length && data ? <p className="ph-empty">Message your laptop from anywhere. It answers in text. It can't change anything on the computer from here.</p> : null}
+          {waiting ? <div className="ph-bubble assistant wait" role="status">{Date.now() / 1000 - last.created > 90 ? 'Still waiting. Your laptop may be asleep or offline; it will answer when it is back.' : 'Thinking…'}</div> : null}
+          {msg ? <div className="ph-msg" role="status">{msg}</div> : null}
+          <div ref={end} />
+        </>) : tab === 'notes' ? (<>
           <div className="ph-add">
             <textarea aria-label="Write a note" rows={3} placeholder="Jot something down, or ask your laptop to look into it" value={text} onChange={(e) => setText(e.target.value)} />
             <div className="ph-row"><button className="btn secondary" disabled={!text.trim()} onClick={() => add('note')}>Save note</button><button className="btn primary" disabled={!text.trim()} onClick={() => add('ask')}>Ask laptop</button></div>
@@ -103,7 +125,11 @@ export default function PhoneApp() {
         </>)}
         {!data ? <p className="ph-empty">Loading…</p> : null}
       </div>
+      {tab === 'chat' ? (
+        <div className="ph-compose"><input aria-label="Message" placeholder="Message VANTA" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') sendChat() }} />
+          <button className="btn primary" disabled={!draft.trim()} onClick={sendChat}>Send</button></div>) : null}
       <nav className="tabs ph-tabs" role="tablist">
+        <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
         <button role="tab" aria-selected={tab === 'notes'} onClick={() => setTab('notes')}>Notes</button>
         <button role="tab" aria-selected={tab === 'people'} onClick={() => setTab('people')}>People</button>
       </nav>

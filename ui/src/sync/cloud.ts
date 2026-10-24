@@ -5,7 +5,8 @@ export interface Cfg { url: string; anon: string; email: string }
 export interface Person { id: string; name: string; relation: string; aliases: string; notes: string; updated_at: number }
 export interface Claim { id: string; person_id: string; text: string; source: string; stated_at: number; superseded_by: string | null; updated_at: number }
 export interface Note { id: string; text: string; kind: 'note' | 'ask'; created: number; updated_at: number }
-export interface Data { people: Person[]; claims: Claim[]; notes: Note[] }
+export interface Chat { id: string; role: 'user' | 'assistant'; text: string; reply_to: string; created: number; updated_at: number }
+export interface Data { people: Person[]; claims: Claim[]; notes: Note[]; chats: Chat[] }
 
 export class Cloud {
   token = ''; refresh = ''
@@ -41,16 +42,17 @@ export class Cloud {
 
   async load(key: CryptoKey): Promise<Data> {
     const rows = await this.pull()
-    const out: Data = { people: [], claims: [], notes: [] }
+    const out: Data = { people: [], claims: [], notes: [], chats: [] }
     for (const r of rows) {
       if (r.kind === 'vault' || r.deleted) continue
       try {
         const row = JSON.parse(await decrypt(key, r.blob, r.id, r.kind))
         if (row.deleted) continue
-        if (r.kind === 'people') out.people.push(row); else if (r.kind === 'claims') out.claims.push(row); else if (r.kind === 'notes') out.notes.push(row)
+        if (r.kind === 'people') out.people.push(row); else if (r.kind === 'claims') out.claims.push(row); else if (r.kind === 'notes') out.notes.push(row); else if (r.kind === 'chats') out.chats.push(row)
       } catch { /* a record we can't read is skipped, never shown */ }
     }
     out.notes.sort((a, b) => b.created - a.created)
+    out.chats.sort((a, b) => a.created - b.created)
     return out
   }
 
@@ -58,6 +60,11 @@ export class Cloud {
     const now = Date.now() / 1000, id = crypto.randomUUID(), rid = `notes:${id}`
     const row = { id, text: text.trim().slice(0, 2000), kind, created: now, updated_at: now, device_id: 'phone', deleted: 0 }
     await this.push([{ id: rid, kind: 'notes', updated_at: Math.round(now * 1000), device_id: 'phone', deleted: false, blob: await encrypt(key, JSON.stringify(row), rid, 'notes') }])
+  }
+  async sendChat(key: CryptoKey, text: string): Promise<void> {
+    const now = Date.now() / 1000, id = crypto.randomUUID(), rid = `chats:${id}`
+    const row = { id, role: 'user', text: text.trim().slice(0, 4000), reply_to: '', created: now, updated_at: now, device_id: 'phone', deleted: 0 }
+    await this.push([{ id: rid, kind: 'chats', updated_at: Math.round(now * 1000), device_id: 'phone', deleted: false, blob: await encrypt(key, JSON.stringify(row), rid, 'chats') }])
   }
   async deleteNote(key: CryptoKey, n: Note): Promise<void> {
     const now = Date.now() / 1000, rid = `notes:${n.id}`

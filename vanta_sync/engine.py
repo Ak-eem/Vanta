@@ -12,7 +12,7 @@ from . import crypto
 from .store import Store
 
 # What syncs. Anything not listed here never leaves the laptop (activity log, screen data, process history).
-TABLES = {"people": "people", "claims": "people", "notes": "notes"}
+TABLES = {"people": "people", "claims": "people", "notes": "notes", "chats": "notes"}
 VAULT_ID = "_vault"
 
 

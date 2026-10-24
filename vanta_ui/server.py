@@ -1509,7 +1509,28 @@ if AWARE_OK:
         from vanta_knowledge.notes import Notes
         from vanta_sync.service import SyncService
         notes_db = Notes()
-        sync_service = SyncService(people_db.path, notes_db.path, notes_db,
+        def _phone_reply(text: str) -> str:
+            """Text-only answers for the phone. No files, no commands, no approvals: nothing here can act on the laptop."""
+            sid = "phone"
+            try:
+                rag = get_rag(text)
+            except Exception:
+                rag = ""
+            effort = pick_reasoning_effort("CHAT", False, False, False, bool(conversations.get(sid)))
+            msgs = build_prompt(sid, text, "CHAT", rag, "", effort)
+            msgs[0]["content"] += ("\n\n[You are replying to the user's phone. Keep it short and plain. You cannot run commands, "
+                                   "open files or change anything on the computer from here; if asked, say that needs the laptop.]")
+            try:
+                extra = bridge.context_for(text)
+                if extra:
+                    msgs[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
+            except Exception:
+                pass
+            reply = call_once(msgs, "CHAT", reasoning_effort=effort)
+            save_history(sid, text, reply)
+            return reply
+
+        sync_service = SyncService(people_db.path, notes_db.path, notes_db, reply=_phone_reply,
                                    on_ask=lambda t: nudges.nudge(f"phone:{t[:30]}", "medium", "From your phone", t),
                                    on_state=lambda st: socketio.emit("sync_state", st))
         if os.getenv("VANTA_SYNC_PASSPHRASE"):
