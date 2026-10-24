@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
-import type { Approval, GuardianState, Nudge, PrivacyState, Project, SyncState } from '../types'
+import type { Approval, GuardianState, Nudge, PrivacyState, Project, ScanResult, SyncState } from '../types'
 import { ProjectsPanel, SafetyPanel } from './Panels'
 import type { LayoutPref } from '../lib/hudMode'
 import type { Fx } from '../lib/useFx'
@@ -60,7 +60,8 @@ function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUn
   </>)
 }
 
-export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode }: {
+export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode, scans, onScan }: {
+  scans: ScanResult[]; onScan: (p: string) => void
   onGuardMode: (m: 'ask' | 'auto') => void
   projects: Project[]; guardian: GuardianState | null; onSaveProject: (p: Partial<Project>) => void; onRemoveProject: (id: string) => void; onRestore: (id: string) => void; onOpenPanels: () => void
   sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void
@@ -78,7 +79,7 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
             {(['privacy', 'projects', 'safety'] as const).map((t) => <button key={t} role="tab" aria-checked={tab === t} onClick={() => setTab(t)}>{t === 'privacy' ? 'General' : t === 'projects' ? 'Projects' : 'Safety'}</button>)}
           </div>
           {tab === 'projects' ? <ProjectsPanel projects={projects} onSave={onSaveProject} onRemove={onRemoveProject} /> : null}
-          {tab === 'safety' ? <SafetyPanel g={guardian} onRestore={onRestore} onMode={onGuardMode} /> : null}
+          {tab === 'safety' ? <SafetyPanel g={guardian} onRestore={onRestore} onMode={onGuardMode} scans={scans} onScan={onScan} /> : null}
           {tab === 'privacy' ? <>
           <p>You decide. Pausing stops everything at once. Password managers, private windows and banking pages are never read.</p>
           {SOURCES.map((s) => (

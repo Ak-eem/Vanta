@@ -1404,6 +1404,31 @@ def on_guardian_get():
     _emit_guardian_state()
 
 
+@socketio.on("scans_get")
+def on_scans_get():
+    if AWARE_OK:
+        emit("scans", scanner_obj.recent(30))
+
+
+@socketio.on("scan_file")
+def on_scan_file(data):
+    """Scan one file on request. Read-only: the file is inspected, never run or moved."""
+    if not AWARE_OK:
+        return
+    p = Path(str((data or {}).get("path", "")).strip().strip('"')).expanduser()
+    if not p.is_file():
+        emit("response", {"text": "I can't find a file at that path."})
+        return
+    sid = request.sid
+    def work():
+        try:
+            _on_scan(scanner_obj.scan(p, force=True))
+            socketio.emit("scans", scanner_obj.recent(30), room=sid)
+        except Exception as exc:
+            socketio.emit("response", {"text": f"I couldn't scan that: {exc}"}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
 @socketio.on("guardian_mode")
 def on_guardian_mode(data):
     if AWARE_OK:
@@ -1570,13 +1595,14 @@ try:
     from guardian.actions import Guardian, Refused
     from guardian.audit import AuditLog
     from guardian.auto import Autopilot, Settings as GuardSettings
+    from scanner.engine import Scanner, DownloadWatcher, Sweeper
     from projects.registry import Projects
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1602,6 +1628,51 @@ if AWARE_OK:
         _emit_guardian_state()
 
     autopilot = Autopilot(guardian, guard_settings, _auto_notify)
+
+    def _explain(facts: dict) -> str:
+        """Plain-language 'what is this and what is it for', from the scan facts plus a quick web look-up of the name."""
+        research = ""
+        try:
+            if GOOGLE_OK:
+                research = get_google(f"what is {facts['name']} {facts.get('publisher', '')} software program") or ""
+        except Exception:
+            pass
+        brief = {k: facts.get(k) for k in ("name", "kind", "size", "publisher", "label", "reasons", "vouched", "inside", "strings")}
+        msgs = [{"role": "system", "content": "You explain downloaded files to a non-technical person. Use ONLY the facts and search notes given. "
+                 "In at most 3 short sentences say what this probably is, what it is normally used for, and whether anything looks off. "
+                 "If you are not sure, say so plainly. Never claim a file is safe or malicious beyond the stated verdict."},
+                {"role": "user", "content": f"Facts: {json.dumps(brief, default=str)[:1800]}\n\nCode/script excerpt:\n{(facts.get('text') or '')[:2500]}\n\nWeb notes:\n{research[:1500]}"}]
+        return call_once(msgs, "CHAT", max_tok=220, temp=0.2).strip()
+
+    scanner_obj = Scanner(explain=_explain, is_trusted=lambda r: guard_settings.is_trusted(r.get("name", ""), r.get("path", ""), (r.get("signature") or {}).get("publisher", "")))
+
+    def _on_scan(res: dict) -> None:
+        """Called for every finished scan. Safe files stay quiet; anything else is shown, and risky files come with actions."""
+        socketio.emit("scan_result", res)
+        if res["label"] == "safe":
+            return
+        if res["label"] == "unknown" and res.get("kind") not in ("windows program", "linux program", "script"):
+            return
+        title = {"dangerous": f"{res['name']} looks dangerous", "suspicious": f"{res['name']} looks suspicious", "unknown": f"I checked {res['name']}"}[res["label"]]
+        body = (res.get("about") or "") + ("\n\n" if res.get("about") else "") + (
+            "What I found: " + "; ".join(res["reasons"]) if res["reasons"] else "No red flags found, but I couldn't confirm who made it.")
+        props = []
+        if res["label"] in ("dangerous", "suspicious"):
+            try:
+                props.append(guardian.propose("quarantine", {"path": res["path"]}, "; ".join(res["reasons"][:2]) or "flagged by my scan"))
+            except Refused:
+                pass
+        secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and res.get("act") and props) else 0
+        socketio.emit("stage", guardian_stage("high" if res["label"] == "dangerous" else "medium", title, body, props, secs) if props else
+                      guardian_stage("medium", title, body, []))
+        if secs:
+            autopilot.schedule(props)
+        nudges.nudge(f"scan:{res['sha256'][:12]}", "high" if res["label"] == "dangerous" else "medium" if props else "low", title, (res["reasons"] or ["Couldn't verify the publisher."])[0])
+        _emit_guardian_state()
+
+    _dl = Path(os.getenv("VANTA_SCAN_FOLDERS", str(Path.home() / "Downloads"))).expanduser()
+    download_watcher = DownloadWatcher(scanner_obj, [Path(x) for x in os.getenv("VANTA_SCAN_FOLDERS", str(_dl)).split(os.pathsep)], _on_scan)
+    sweeper = Sweeper(scanner_obj, lambda r: _on_scan(r) if r["label"] in ("dangerous", "suspicious") else None)
     bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
     nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
     privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
@@ -1610,6 +1681,17 @@ if AWARE_OK:
         sev = {"high": "high", "medium": "medium"}.get(severity, "low")
         props = []
         trusted = bool(evidence) and guard_settings.is_trusted(str(evidence.get("name", "")), str(evidence.get("exe", "")))
+        verdict = None
+        if evidence and evidence.get("exe") and not trusted:
+            try:
+                verdict = scanner_obj.scan(Path(evidence["exe"]), explain=False)       # look inside before deciding anything
+            except Exception:
+                verdict = None
+            if verdict and verdict["label"] == "safe":
+                activity_log.add("process", "scan_cleared", app=str(evidence.get("name", "")), title=f"{verdict['name']} checked: {'; '.join(verdict['vouched'])}"[:120])
+                return                                                           # a real, verified app: don't bother you, don't touch it
+            if verdict and verdict["reasons"]:
+                message += "\n\nI also looked inside the file: " + "; ".join(verdict["reasons"][:3]) + "."
         if evidence and evidence.get("pid") and not trusted:
             # Offer containment, never perform it. Each proposal is checked now and again when you approve.
             for kind, target in (("end_process", {"pid": evidence["pid"], "name": evidence.get("name"), "created": evidence.get("created")}),
@@ -1619,9 +1701,11 @@ if AWARE_OK:
                 except Refused:
                     pass
         if props:
-            secs = int(guard_settings.data["veto_seconds"]) if autopilot.active() else 0
+            # Autopilot only acts on its own when my scan is confident. Unknown files are always left for you.
+            secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and verdict and verdict.get("act")) else 0
             socketio.emit("stage", guardian_stage(severity, title, message, props, secs))
-            autopilot.schedule(props)
+            if secs:
+                autopilot.schedule(props)
         else:
             socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)
@@ -1669,6 +1753,9 @@ def start_awareness(port: int) -> None:
     if not AWARE_OK:
         return
     proc_watcher.start()
+    if download_watcher:
+        download_watcher.start()
+        sweeper.start()
     window_watcher.start()
     screen_watcher.start()          # stays idle unless the 'screen' source is switched on
     global tray

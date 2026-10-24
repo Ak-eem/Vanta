@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState } from '../types'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult } from '../types'
 import { sanitizeStage } from '../stage/sanitize'
 import { calmError } from './calmError'
 
@@ -23,6 +23,7 @@ export interface State {
   sync: SyncState | null
   projects: Project[]
   guardian: GuardianState | null
+  scans: ScanResult[]
 }
 
 type Action =
@@ -46,13 +47,15 @@ type Action =
   | { t: 'sync'; v: SyncState }
   | { t: 'projects'; v: Project[] }
   | { t: 'guardian'; v: GuardianState }
+  | { t: 'scans'; v: ScanResult[] }
+  | { t: 'scan'; v: ScanResult }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null, scans: [],
 }
 
 export function reducer(s: State, a: Action): State {
@@ -98,6 +101,8 @@ export function reducer(s: State, a: Action): State {
     case 'sync': return { ...s, sync: a.v }
     case 'projects': return { ...s, projects: Array.isArray(a.v) ? a.v.slice(0, 50) : [] }
     case 'guardian': return { ...s, guardian: a.v }
+    case 'scans': return { ...s, scans: Array.isArray(a.v) ? a.v.slice(0, 30) : [] }
+    case 'scan': return { ...s, scans: [a.v, ...s.scans.filter((x) => x.sha256 !== a.v.sha256)].slice(0, 30) }
     case 'tel': {
       const t = a.v as Partial<Telemetry> | null
       if (!t || typeof t !== 'object') return s
@@ -142,6 +147,8 @@ export function useVanta() {
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
+    socket.on('scans', (d: ScanResult[]) => dispatch({ t: 'scans', v: d }))
+    socket.on('scan_result', (d: ScanResult) => dispatch({ t: 'scan', v: d }))
     socket.on('projects', (d: Project[]) => dispatch({ t: 'projects', v: d }))
     socket.on('guardian_state', (d: GuardianState) => dispatch({ t: 'guardian', v: d }))
     socket.on('sync_state', (d: SyncState) => dispatch({ t: 'sync', v: d }))
@@ -190,7 +197,8 @@ export function useVanta() {
   const api = useMemo(() => ({
     send,
     syncUnlock: (passphrase: string) => sock.current?.emit('sync_unlock', { passphrase }),
-    loadPanels: () => { sock.current?.emit('projects_get'); sock.current?.emit('guardian_get') },
+    loadPanels: () => { sock.current?.emit('projects_get'); sock.current?.emit('guardian_get'); sock.current?.emit('scans_get') },
+    scanFile: (path: string) => sock.current?.emit('scan_file', { path }),
     saveProject: (p: Partial<Project>) => sock.current?.emit('project_save', p),
     removeProject: (id: string) => sock.current?.emit('project_remove', { id }),
     setGuardMode: (mode: 'ask' | 'auto') => sock.current?.emit('guardian_mode', { mode }),

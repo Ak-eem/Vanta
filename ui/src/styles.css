@@ -207,3 +207,4 @@ path.flow { animation: dash 1.4s linear infinite; } @keyframes dash { to { strok
 .drawer h3 { margin: 0 0 4px; }
 .chain { font-size: 12px; padding: 8px 10px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border); } .chain.ok { color: var(--good); border-color: rgba(111,214,165,.4); } .chain.bad { color: var(--danger); border-color: var(--danger); }
 .log { display: grid; grid-template-columns: 92px 1fr; gap: 2px 8px; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--muted); } .log span:nth-child(2) { color: var(--text); } .log em { grid-column: 2; font-style: normal; font: 11px var(--mono); overflow-wrap: anywhere; }
+.chip.scan-safe { color: var(--good); border-color: rgba(111,214,165,.45); } .chip.scan-dangerous { color: var(--danger); border-color: rgba(255,107,122,.5); } .chip.scan-unknown { color: var(--muted); border-color: var(--border-2); }

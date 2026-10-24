@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { GuardianState, Project } from '../types'
+import type { GuardianState, Project, ScanResult } from '../types'
 
 const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -28,7 +28,8 @@ export function ProjectsPanel({ projects, onSave, onRemove }: { projects: Projec
   </>)
 }
 
-export function SafetyPanel({ g, onRestore, onMode }: { g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void }) {
+export function SafetyPanel({ g, onRestore, onMode, scans, onScan }: { g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void; scans: ScanResult[]; onScan: (p: string) => void }) {
+  const [path, setPath] = useState('')
   if (!g) return <p>Loading…</p>
   return (<>
     <div className="toggle" style={{ borderTop: 0 }}>
@@ -40,7 +41,20 @@ export function SafetyPanel({ g, onRestore, onMode }: { g: GuardianState | null;
     </div>
     <p>Files go to a locked folder (never deleted). Everything is written here.</p>
     <div className={`chain ${g.chain_ok ? 'ok' : 'bad'}`} role="status">{g.chain_ok ? 'Log intact: nothing has been edited or removed.' : 'Warning: this log has been changed after the fact.'}</div>
-    <h3>Quarantined files</h3>
+    <h3>Recent scans</h3>
+    <p>I check every download and every running program, reading what's inside without running it. Only a file's fingerprint is ever sent out, and only if you add a VirusTotal key.</p>
+    <div className="composer" style={{ marginBottom: 10 }}>
+      <input aria-label="File to scan" placeholder="Scan a file: paste its path" value={path} onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && path.trim()) { onScan(path.trim()); setPath('') } }} />
+      <button className="btn sm primary" disabled={!path.trim()} onClick={() => { onScan(path.trim()); setPath('') }}>Scan</button>
+    </div>
+    {scans.slice(0, 12).map((x) => (
+      <div className="proj" key={x.sha256}>
+        <div className="proj-h"><b style={{ overflowWrap: 'anywhere' }}>{x.name}</b><span className={`chip scan-${x.label}`}>{x.label}</span></div>
+        {x.about ? <div className="proj-s">{x.about}</div> : null}
+        <div className="proj-m">{[...x.reasons, ...x.vouched].slice(0, 3).join(' · ') || 'Nothing unusual found.'}{x.publisher ? ` · ${x.publisher}` : ''}</div>
+      </div>))}
+    {!scans.length ? <p>Nothing scanned yet.</p> : null}
+    <h3 style={{ marginTop: 16 }}>Quarantined files</h3>
     {g.quarantined.map((q) => (
       <div className="proj" key={q.id}><div className="proj-h"><b>{name(q.original)}</b></div><div className="proj-m">{q.original}<br />Locked {when(q.ts)}</div>
         <button className="btn sm" onClick={() => onRestore(q.id)}>Put it back</button></div>))}
