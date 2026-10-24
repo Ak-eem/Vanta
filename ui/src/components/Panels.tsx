@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { GuardianState, Project } from '../types'
 
-const WORDS: Record<string, string> = { proposed: 'Asked you', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
+const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const name = (p: string) => p.split(/[\\/]/).pop() ?? p
 
@@ -28,10 +28,17 @@ export function ProjectsPanel({ projects, onSave, onRemove }: { projects: Projec
   </>)
 }
 
-export function SafetyPanel({ g, onRestore }: { g: GuardianState | null; onRestore: (id: string) => void }) {
+export function SafetyPanel({ g, onRestore, onMode }: { g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void }) {
   if (!g) return <p>Loading…</p>
   return (<>
-    <p>I never act on a threat without you pressing a button. Files go to a locked folder (never deleted). Everything is written here.</p>
+    <div className="toggle" style={{ borderTop: 0 }}>
+      <div>Let VANTA act on its own<small>{g.mode === 'auto'
+        ? `On. When I find a threat I wait ${g.veto ?? 30} seconds so you can press Stop, then deal with it (up to ${g.max_per_hour ?? 3} times an hour).`
+        : 'Off. I ask you every time.'}</small></div>
+      <button className="switch" role="switch" aria-label="Let VANTA act on its own" aria-checked={g.mode === 'auto'}
+        onClick={() => { if (g.mode === 'auto' || window.confirm('Let VANTA end programs and quarantine files by itself?\n\nIt waits 30 seconds first so you can stop it, never deletes anything, and you can undo file moves. Ending a program loses anything unsaved in it.')) onMode(g.mode === 'auto' ? 'ask' : 'auto') }} />
+    </div>
+    <p>Files go to a locked folder (never deleted). Everything is written here.</p>
     <div className={`chain ${g.chain_ok ? 'ok' : 'bad'}`} role="status">{g.chain_ok ? 'Log intact: nothing has been edited or removed.' : 'Warning: this log has been changed after the fact.'}</div>
     <h3>Quarantined files</h3>
     {g.quarantined.map((q) => (

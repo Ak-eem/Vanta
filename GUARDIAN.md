@@ -8,3 +8,9 @@
 
 **Projects**: Settings > Projects. Add a name and folder; VANTA reads the folder (git branch, unsaved changes, last commit) and
 uses it when you ask about that project. Projects sync to the phone (read-only there).
+
+## Autopilot (opt-in)
+Settings > Safety > "Let VANTA act on its own". When on, VANTA still shows the finding, then waits 30 seconds (press **Stop** to cancel)
+and carries out the same two actions itself. Limits: at most 3 automatic actions an hour (extras are left for you), the same
+safety refusals as manual mode, never deletes, programs you pressed "Always trust" on are skipped, and every action is logged as "VANTA (auto)".
+Switching it off before the timer ends holds the action.

@@ -1375,22 +1375,41 @@ def on_stage_action(data):
             except Refused as exc:
                 socketio.emit("response", {"text": str(exc)}, room=sid)
             _emit_guardian_state()
-        elif verb == "ignore":
-            for pid in filter(None, rest.split(",")):
-                guardian.deny(pid)
+        elif verb in ("ignore", "stop"):
+            ids = [i for i in rest.split(",") if i]
+            autopilot.stop(ids)
             socketio.emit("response", {"text": "Okay, I'll leave it alone."}, room=sid)
+        elif verb == "trust":
+            for i in filter(None, rest.split(",")):
+                pr = guardian.pending.get(i)
+                if pr:
+                    t = pr["target"]
+                    guard_settings.trust(str(t.get("name") or t.get("path") or ""))
+                    if pr["kind"] == "quarantine":
+                        guard_settings.trust(str(t.get("path", "")))
+            autopilot.stop([i for i in rest.split(",") if i])
+            socketio.emit("response", {"text": "Okay, I'll trust that program from now on."}, room=sid)
         return
     socketio.emit("response", {"text": "I can't do that one yet. For now I can look into it and tell you what I find."}, room=sid)
 
 
 def _emit_guardian_state():
     if AWARE_OK:
-        socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None})
+        socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None,
+                                         "mode": guard_settings.data["mode"], "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
 
 
 @socketio.on("guardian_get")
 def on_guardian_get():
     _emit_guardian_state()
+
+
+@socketio.on("guardian_mode")
+def on_guardian_mode(data):
+    if AWARE_OK:
+        guard_settings.set_mode("auto" if (data or {}).get("mode") == "auto" else "ask")
+        guardian.audit.add("mode_changed", "", mode=guard_settings.data["mode"], by="you")
+        _emit_guardian_state()
 
 
 @socketio.on("guardian_restore")
@@ -1550,13 +1569,14 @@ try:
     from vanta_knowledge.people import People
     from guardian.actions import Guardian, Refused
     from guardian.audit import AuditLog
+    from guardian.auto import Autopilot, Settings as GuardSettings
     from projects.registry import Projects
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1566,6 +1586,22 @@ if AWARE_OK:
     people_db = People()
     projects_db = Projects()
     guardian = Guardian(AuditLog())
+    guard_settings = GuardSettings()
+
+    def _auto_notify(kind, d):
+        p = d["proposal"]; t = p["target"]
+        what = f"stop {t.get('name', 'that program')}" if p["kind"] == "end_process" else f"quarantine {Path(str(t.get('path', ''))).name}"
+        if kind == "done":
+            msg = f"I went ahead and {'asked ' + str(t.get('name')) + ' to stop' if p['kind'] == 'end_process' else 'moved ' + Path(str(t.get('path', ''))).name + ' to quarantine'}. You can undo file moves in Settings > Safety."
+        elif kind == "held":
+            msg = f"I didn't {what}. {d['why']}"
+        else:
+            msg = f"I tried to {what} but couldn't: {d['why']}"
+        socketio.emit("response", {"text": msg})
+        nudges.nudge(f"auto:{p['id']}", "medium", "VANTA acted on its own" if kind == "done" else "Needs your decision", msg)
+        _emit_guardian_state()
+
+    autopilot = Autopilot(guardian, guard_settings, _auto_notify)
     bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
     nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
     privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
@@ -1573,7 +1609,8 @@ if AWARE_OK:
     def _on_process_alert(severity, title, message, source, evidence=None):
         sev = {"high": "high", "medium": "medium"}.get(severity, "low")
         props = []
-        if evidence and evidence.get("pid"):
+        trusted = bool(evidence) and guard_settings.is_trusted(str(evidence.get("name", "")), str(evidence.get("exe", "")))
+        if evidence and evidence.get("pid") and not trusted:
             # Offer containment, never perform it. Each proposal is checked now and again when you approve.
             for kind, target in (("end_process", {"pid": evidence["pid"], "name": evidence.get("name"), "created": evidence.get("created")}),
                                  ("quarantine", {"path": evidence.get("exe", "")})):
@@ -1582,7 +1619,9 @@ if AWARE_OK:
                 except Refused:
                     pass
         if props:
-            socketio.emit("stage", guardian_stage(severity, title, message, props))
+            secs = int(guard_settings.data["veto_seconds"]) if autopilot.active() else 0
+            socketio.emit("stage", guardian_stage(severity, title, message, props, secs))
+            autopilot.schedule(props)
         else:
             socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)

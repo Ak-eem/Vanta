@@ -193,6 +193,7 @@ export function useVanta() {
     loadPanels: () => { sock.current?.emit('projects_get'); sock.current?.emit('guardian_get') },
     saveProject: (p: Partial<Project>) => sock.current?.emit('project_save', p),
     removeProject: (id: string) => sock.current?.emit('project_remove', { id }),
+    setGuardMode: (mode: 'ask' | 'auto') => sock.current?.emit('guardian_mode', { mode }),
     restore: (id: string) => sock.current?.emit('guardian_restore', { id }),
     syncNow: () => sock.current?.emit('sync_now'),
     pause: (paused: boolean) => sock.current?.emit('privacy_pause', { paused }),

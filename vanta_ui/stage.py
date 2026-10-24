@@ -97,7 +97,7 @@ def alert_stage(severity: str, title: str, message: str) -> dict:
                 {"id": "dismiss", "label": "Ignore once", "kind": "ghost"}], layout="single")
 
 
-def guardian_stage(severity: str, title: str, message: str, proposals: list) -> dict:
+def guardian_stage(severity: str, title: str, message: str, proposals: list, countdown: int = 0) -> dict:
     """An alert that comes with things VANTA could do. Each button is a request you approve by pressing it."""
     tone = "danger" if severity == "high" else "warn"
     blocks = [{"id": "what", "type": "text", "title": "What I noticed", "tone": tone, "data": {"body": message}}]
@@ -111,6 +111,14 @@ def guardian_stage(severity: str, title: str, message: str, proposals: list) -> 
         blocks.append({"id": f"p{i}", "type": "text", "title": "I can do this", "data": {"body": line + f"  Why: {p['reason']}"}})
         actions.append({"id": f"guard:approve:{p['id']}", "label": label, "kind": "primary" if i == 0 else "secondary"})
         ids.append(p["id"])
-    actions.append({"id": "guard:ignore:" + ",".join(ids), "label": "Leave it alone", "kind": "ghost"})
-    blocks.append({"id": "rec", "type": "recommendation", "data": {"title": "Your call", "reason": "I won't do anything unless you press a button. Everything I do is written to the safety log."}})
+    if countdown:
+        actions = [{"id": "guard:stop:" + ",".join(ids), "label": "Stop, don't do it", "kind": "primary"}] + \
+                  [{**a, "label": "Do it now: " + a["label"], "kind": "secondary"} for a in actions] + \
+                  [{"id": "guard:trust:" + ",".join(ids), "label": "Always trust this program", "kind": "ghost"}]
+        rec = {"title": f"I'll do this on my own in {countdown} seconds", "reason": "Autopilot is on. Press Stop to cancel. Everything I do is written to the safety log and can be undone for files."}
+    else:
+        actions.append({"id": "guard:ignore:" + ",".join(ids), "label": "Leave it alone", "kind": "ghost"})
+        actions.append({"id": "guard:trust:" + ",".join(ids), "label": "Always trust this program", "kind": "ghost"})
+        rec = {"title": "Your call", "reason": "I won't do anything unless you press a button. Everything I do is written to the safety log."}
+    blocks.append({"id": "rec", "type": "recommendation", "data": rec})
     return make_stage(title[:60], blocks, actions=actions, summary=f"{title}. I put what I found and what I can do on the stage.", layout="single")
