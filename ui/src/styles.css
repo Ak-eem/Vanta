@@ -189,3 +189,11 @@ path.flow { animation: dash 1.4s linear infinite; } @keyframes dash { to { strok
 [data-fx='low'] .r-glow, [data-fx='low'] .sphere-fallback { display: none; }
 
 .hud-field .state-label.side { transform: translateY(-50%); }
+
+/* chat panel only appears when used (desktop) */
+.app { transition: grid-template-columns .35s cubic-bezier(.3,.7,.2,1); }
+.app[data-rail='closed'] { grid-template-columns: 0 1fr; }
+.app[data-rail='closed'] .rail { visibility: hidden; border: 0; padding: 0; overflow: hidden; }
+.dock { position: fixed; left: 50%; bottom: 62px; transform: translateX(-50%); z-index: 20; height: 46px; padding: 0 22px; min-width: min(80vw, 320px); text-align: left; color: var(--muted); font: 14px var(--sans); background: rgba(14,21,36,.85); backdrop-filter: blur(8px); border: 1px solid var(--border-2); border-radius: 999px; box-shadow: 0 0 24px rgba(37,150,255,.12); }
+.dock:hover { border-color: var(--accent); color: var(--text); }
+@media (max-width: 819px) { .dock { display: none; } }

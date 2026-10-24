@@ -29,3 +29,4 @@ pillow>=10.0
 plyer>=2.1                  # desktop notifications
 pyttsx3>=2.90               # voice nudges (Windows SAPI)
 uiautomation>=2.0; sys_platform == "win32"   # on-demand window text reading
+cryptography>=42

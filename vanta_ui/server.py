@@ -1368,6 +1368,27 @@ def on_stage_action(data):
     socketio.emit("response", {"text": "I can't do that one yet. For now I can look into it and tell you what I find."}, room=sid)
 
 
+@socketio.on("sync_get")
+def on_sync_get():
+    emit("sync_state", sync_service.status() if AWARE_OK and sync_service else {"configured": False, "unlocked": False, "last": 0, "error": ""})
+
+
+@socketio.on("sync_unlock")
+def on_sync_unlock(data):
+    if AWARE_OK and sync_service:
+        pw = str((data or {}).get("passphrase", ""))
+        if len(pw) >= 8:
+            sync_service.unlock(pw)
+        else:
+            emit("sync_state", {**sync_service.status(), "error": "Use at least 8 characters."})
+
+
+@socketio.on("sync_now")
+def on_sync_now():
+    if AWARE_OK and sync_service:
+        threading.Thread(target=sync_service.run_once, daemon=True).start()
+
+
 @socketio.on("privacy_get")
 def on_privacy_get():
     if AWARE_OK:
@@ -1466,7 +1487,7 @@ except Exception as _e:  # keep VANTA usable if an optional dependency is missin
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1482,6 +1503,19 @@ if AWARE_OK:
         sev = {"high": "high", "medium": "medium"}.get(severity, "low")
         socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)
+
+    sync_service = None
+    try:
+        from vanta_knowledge.notes import Notes
+        from vanta_sync.service import SyncService
+        notes_db = Notes()
+        sync_service = SyncService(people_db.path, notes_db.path, notes_db,
+                                   on_ask=lambda t: nudges.nudge(f"phone:{t[:30]}", "medium", "From your phone", t),
+                                   on_state=lambda st: socketio.emit("sync_state", st))
+        if os.getenv("VANTA_SYNC_PASSPHRASE"):
+            threading.Thread(target=lambda: sync_service.unlock(os.environ["VANTA_SYNC_PASSPHRASE"]), daemon=True).start()
+    except Exception as _se:
+        print(f"[sync] unavailable: {_se}")
 
     proc_watcher = ProcessWatcher(activity_log, _on_process_alert)
     window_watcher = WindowWatcher(activity_log)

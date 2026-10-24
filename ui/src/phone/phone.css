@@ -1,0 +1,18 @@
+body { overflow: auto; }
+.ph { min-height: 100dvh; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); }
+.ph-top { display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+.ph-body { flex: 1; padding: 16px 16px 90px; display: flex; flex-direction: column; gap: 12px; }
+.ph-add { display: flex; flex-direction: column; gap: 10px; }
+.ph-add textarea, .ph-setup input { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border-2); border-radius: 12px; padding: 12px 14px; font: 16px var(--sans); resize: vertical; }
+.ph-row { display: flex; gap: 10px; } .ph-row .btn { flex: 1; }
+.ph-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.ph-card p, .ph-card h3 { margin: 0; overflow-wrap: anywhere; } .ph-card h3 { font-size: 17px; margin: 2px 0 6px; } .ph-card p { line-height: 22px; white-space: pre-wrap; }
+.ph-card .claim { color: var(--muted); font-size: 14px; }
+.ph-meta { display: flex; align-items: center; justify-content: space-between; font: 500 11px var(--mono); letter-spacing: .14em; color: var(--muted); min-height: 28px; }
+.ph-msg { color: var(--accent); font-size: 13px; } .ph-empty { color: var(--muted); text-align: center; margin: 24px 0; line-height: 22px; }
+.ph-err { color: #E7A3AB; font-size: 14px; line-height: 20px; }
+.ph-tabs { position: fixed; left: 0; right: 0; bottom: 0; display: grid; height: calc(56px + env(safe-area-inset-bottom)); }
+.ph-setup { max-width: 440px; margin: 0 auto; padding: 32px 20px calc(32px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
+.ph-setup h1 { margin: 0; font-size: 24px; } .ph-setup p { margin: 0; color: var(--muted); line-height: 22px; }
+.ph-setup label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); } .ph-setup label small { font-size: 12px; line-height: 17px; }
+.orb { width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 4px; background: radial-gradient(circle at 35% 30%, #fff 0, var(--accent) 28%, var(--glow) 72%); box-shadow: 0 0 40px rgba(37,150,255,.5); }

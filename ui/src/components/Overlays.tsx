@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect } from 'react'
-import type { Approval, Nudge, PrivacyState } from '../types'
+import { useEffect, useState } from 'react'
+import type { Approval, Nudge, PrivacyState, SyncState } from '../types'
 import type { LayoutPref } from '../lib/hudMode'
 import type { Fx } from '../lib/useFx'
 
@@ -41,7 +41,26 @@ const SOURCES: { key: string; label: string; hint: string }[] = [
 
 const LOOKS: { v: LayoutPref; label: string }[] = [{ v: 'auto', label: 'Auto' }, { v: 'calm', label: 'Calm' }, { v: 'hud', label: 'HUD' }]
 
-export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx }: {
+function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void }) {
+  const [pw, setPw] = useState('')
+  if (!sync) return null
+  const when = sync.last ? new Date(sync.last * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+  return (<>
+    <h3 style={{ marginTop: 22 }}>Phone sync</h3>
+    {!sync.configured ? <p>Not set up yet. See "Phone sync" in the README: it takes about five minutes.</p> : sync.unlocked ? (
+      <p>Connected{when ? ` · last synced ${when}` : ''}. Everything is scrambled on this laptop before it leaves.
+        <button className="btn ghost sm" onClick={onSyncNow}>Sync now</button></p>) : (<>
+      <p>Enter your vault passphrase to start syncing. It stays on this laptop and is never saved.</p>
+      <div className="composer" style={{ marginBottom: 12 }}>
+        <input type="password" aria-label="Vault passphrase" placeholder="Vault passphrase" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && pw) { onUnlock(pw); setPw('') } }} />
+        <button className="btn sm primary" disabled={pw.length < 8} onClick={() => { onUnlock(pw); setPw('') }}>Unlock</button>
+      </div></>)}
+    {sync.error ? <p style={{ color: '#E7A3AB' }}>{sync.error}</p> : null}
+  </>)
+}
+
+export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow }: {
+  sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void
   open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void
   layout: LayoutPref; onLayout: (v: LayoutPref) => void; fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
 }) {
@@ -63,7 +82,8 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
           </div>
           <div className="toggle"><div>Light effects<small>{fxAuto ? 'Turned on because this screen was struggling.' : 'Fewer glows and animations. Easier on an older laptop.'}</small></div>
             <button className="switch" role="switch" aria-label="Light effects" aria-checked={fx === 'low'} onClick={() => onFx(fx === 'low' ? 'full' : 'low')} /></div>
-          <div className="toggle"><div>Sign out<small>Locks VANTA in this browser.</small></div><a className="btn sm" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }} href="/logout">Sign out</a></div>
+          <SyncPanel sync={sync} onUnlock={onUnlock} onSyncNow={onSyncNow} />
+          <div className="toggle" style={{ marginTop: 12 }}><div>Sign out<small>Locks VANTA in this browser.</small></div><a className="btn sm" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }} href="/logout">Sign out</a></div>
         </motion.aside>) : null}
     </AnimatePresence>)
 }

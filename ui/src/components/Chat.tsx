@@ -24,7 +24,7 @@ export function ChatList({ messages, onOpenStage }: { messages: ChatMessage[]; o
     </div>)
 }
 
-export function Composer({ onSend, onVoiceError, disabled }: { onSend: (t: string) => void; onVoiceError: (m: string) => void; disabled?: boolean }) {
+export function Composer({ onSend, onVoiceError, disabled, autoFocus, onActivity }: { onSend: (t: string) => void; onVoiceError: (m: string) => void; disabled?: boolean; autoFocus?: boolean; onActivity?: () => void }) {
   const [text, setText] = useState('')
   const [rec, setRec] = useState(false)
   const media = useRef<MediaRecorder | null>(null)
@@ -52,8 +52,8 @@ export function Composer({ onSend, onVoiceError, disabled }: { onSend: (t: strin
 
   return (
     <div className="composer">
-      <input aria-label="Message VANTA" placeholder="Ask VANTA anything" value={text} disabled={disabled}
-        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} />
+      <input aria-label="Message VANTA" placeholder="Ask VANTA anything" value={text} disabled={disabled} autoFocus={autoFocus}
+        onChange={(e) => { setText(e.target.value); onActivity?.() }} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} />
       <button className={`btn icon mic ${rec ? 'rec' : ''}`} aria-label={rec ? 'Stop recording' : 'Voice'} aria-pressed={rec} onClick={toggleMic}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
       </button>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { STATE_LABEL } from './components/Sphere'
 import { Readouts } from './components/Readouts'
 import { readPref, useHudMode, writePref, type LayoutPref } from './lib/hudMode'
@@ -26,6 +26,11 @@ export default function App() {
   const [unseen, setUnseen] = useState(false)
   const [pref, setPrefState] = useState<LayoutPref>(readPref)
   const [fx, setFx, fxAuto] = useFx()
+  // The chat panel slides away when idle and comes back when it is used (message, typing, or a tap on the dock).
+  const [railOpen, setRailOpen] = useState(false)
+  const lastUse = useRef(Date.now())
+  const poke = () => { lastUse.current = Date.now() }
+  const openRail = () => { poke(); setRailOpen(true) }
   const setPref = (v: LayoutPref) => { writePref(v); setPrefState(v) }
 
   const sphere = sphereState(state)
@@ -39,6 +44,16 @@ export default function App() {
   useEffect(() => { if (stage && tab !== 'stage') setUnseen(true) }, [stage?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'stage') setUnseen(false) }, [tab])
 
+  useEffect(() => { if (state.messages.length) openRail() }, [state.messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!railOpen) return
+    const id = window.setInterval(() => {
+      const typing = document.activeElement?.closest('.composer') && (document.activeElement as HTMLInputElement).value
+      if (!typing && !state.approval && Date.now() - lastUse.current > 20000) setRailOpen(false)
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [railOpen, state.approval])
+
   const openStage = (id: string) => { api.openStage(id); setTab('stage') }
   const onAction = (stageId: string, a: StageAction) => {
     if (a.id.startsWith('ask:')) { api.send(a.id.slice(4)); setTab('chat') }
@@ -48,7 +63,7 @@ export default function App() {
   const sensesLine = `Senses: ${on.filter((n) => n !== 'screen').join(' · ') || 'none'}  |  Screen: ${state.privacy.sources.screen ? 'on' : 'off'}`
 
   return (
-    <div className="app" data-hud={hud ? 'on' : 'off'}>
+    <div className="app" data-hud={hud ? 'on' : 'off'} data-rail={phone || railOpen ? 'open' : 'closed'}>
       <header className="topbar">
         <span className="wordmark">VANTA</span>
         <div className="top-right">
@@ -60,11 +75,11 @@ export default function App() {
         </div>
       </header>
 
-      <aside className="rail" data-hidden={phone && tab !== 'chat'}>
+      <aside className="rail" data-hidden={phone && tab !== 'chat'} onPointerDown={poke} onKeyDown={poke}>
         {phone ? <div className={`state-label ${sphere}`}>{STATE_LABEL[sphere]}</div> : null}
         <div className="status-line">{state.statusText}</div>
         <ChatList messages={state.messages} onOpenStage={openStage} />
-        <Composer onSend={api.send} disabled={state.conn !== 'online'} onVoiceError={(m) => api.dispatch({ t: 'error', message: m })} />
+        <Composer autoFocus={!phone} onActivity={poke} onSend={api.send} disabled={state.conn !== 'online'} onVoiceError={(m) => api.dispatch({ t: 'error', message: m })} />
         <div className="senses">{sensesLine}</div>
       </aside>
 
@@ -74,6 +89,8 @@ export default function App() {
           footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>
 
+      {!phone && !railOpen ? <button className="dock" onClick={openRail} aria-label="Open chat"><span>Ask VANTA…</span></button> : null}
+
       {phone && (
         <nav className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
@@ -82,7 +99,7 @@ export default function App() {
 
       {state.conn === 'offline' && <div className="offline-bar" role="status">Reconnecting… I'll be right back.</div>}
       <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)}
-        layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
+        sync={state.sync} onUnlock={api.syncUnlock} onSyncNow={api.syncNow} layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
       <NudgeToast nudge={state.nudge} onAck={api.ackNudge} />
       <ApprovalModal approval={state.approval} onAnswer={api.answerApproval} />
     </div>)

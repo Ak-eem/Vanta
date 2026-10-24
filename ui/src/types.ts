@@ -46,3 +46,5 @@ export interface Telemetry {
   cpu: number; mem: number; down: number; up: number; procs: number
   battery: { pct: number; plugged: boolean } | null; idle: boolean; app?: string; title?: string
 }
+
+export interface SyncState { configured: boolean; unlocked: boolean; last: number; error: string }
