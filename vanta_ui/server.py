@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1205,7 +1205,7 @@ def handle_chat(data):
     if AWARE_OK:
         try:
             bridge.note_claims(msg)
-            extra = bridge.context_for(msg)
+            extra = "\n".join(x for x in (bridge.context_for(msg), projects_db.context_for(msg)) if x)
             if extra:
                 messages[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
         except Exception as exc:
@@ -1361,11 +1361,77 @@ def handle_orchestrate(data):
 
 @socketio.on("stage_action")
 def on_stage_action(data):
-    """Buttons on stage cards. Today only chat shortcuts (ask:) and dismiss exist client-side;
-    anything else is acknowledged calmly rather than silently ignored."""
+    """Buttons on stage cards. `guard:` buttons are approvals for Guardian requests; pressing one is the approval."""
     sid = request.sid
-    print(f"[stage] action {data!r}")
+    action = str((data or {}).get("action", ""))
+    if AWARE_OK and action.startswith("guard:"):
+        _, verb, rest = (action.split(":", 2) + ["", ""])[:3]
+        if verb == "approve":
+            try:
+                res = guardian.approve(rest)
+                done = ("Done. I moved it to the locked quarantine folder. You can put it back from Settings > Safety."
+                        if "quarantine_id" in res else f"Done. I asked {res.get('ended', 'it')} to stop.")
+                socketio.emit("response", {"text": done}, room=sid)
+            except Refused as exc:
+                socketio.emit("response", {"text": str(exc)}, room=sid)
+            _emit_guardian_state()
+        elif verb == "ignore":
+            for pid in filter(None, rest.split(",")):
+                guardian.deny(pid)
+            socketio.emit("response", {"text": "Okay, I'll leave it alone."}, room=sid)
+        return
     socketio.emit("response", {"text": "I can't do that one yet. For now I can look into it and tell you what I find."}, room=sid)
+
+
+def _emit_guardian_state():
+    if AWARE_OK:
+        socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None})
+
+
+@socketio.on("guardian_get")
+def on_guardian_get():
+    _emit_guardian_state()
+
+
+@socketio.on("guardian_restore")
+def on_guardian_restore(data):
+    if not AWARE_OK:
+        return
+    try:
+        p = guardian.propose("restore", {"id": str((data or {}).get("id", ""))}, "You asked to put it back")
+        guardian.approve(p["id"])
+        emit("response", {"text": "Put it back where it was."})
+    except Refused as exc:
+        emit("response", {"text": str(exc)})
+    _emit_guardian_state()
+
+
+@socketio.on("projects_get")
+def on_projects_get():
+    if AWARE_OK:
+        emit("projects", [{**p, "health": projects_db.health(p)} for p in projects_db.all()])
+
+
+@socketio.on("project_save")
+def on_project_save(data):
+    if not AWARE_OK:
+        return
+    d = data or {}
+    try:
+        if d.get("id"):
+            projects_db.update(str(d["id"]), **{k: str(d[k])[:400] for k in ("summary", "status", "next_step", "folder") if k in d})
+        else:
+            projects_db.add(str(d.get("name", "")), str(d.get("folder", "")), str(d.get("summary", "")))
+    except ValueError as exc:
+        emit("response", {"text": str(exc)})
+    on_projects_get()
+
+
+@socketio.on("project_remove")
+def on_project_remove(data):
+    if AWARE_OK:
+        projects_db.remove(str((data or {}).get("id", "")))
+        on_projects_get()
 
 
 @socketio.on("sync_get")
@@ -1482,12 +1548,15 @@ try:
     from awareness.memory_bridge import MemoryBridge
     from awareness.tray import Tray
     from vanta_knowledge.people import People
+    from guardian.actions import Guardian, Refused
+    from guardian.audit import AuditLog
+    from projects.registry import Projects
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = sync_service = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1495,13 +1564,27 @@ if AWARE_OK:
     privacy = PrivacyState()
     activity_log = ActivityLog(privacy)
     people_db = People()
+    projects_db = Projects()
+    guardian = Guardian(AuditLog())
     bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
     nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
     privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
 
-    def _on_process_alert(severity, title, message, source):
+    def _on_process_alert(severity, title, message, source, evidence=None):
         sev = {"high": "high", "medium": "medium"}.get(severity, "low")
-        socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
+        props = []
+        if evidence and evidence.get("pid"):
+            # Offer containment, never perform it. Each proposal is checked now and again when you approve.
+            for kind, target in (("end_process", {"pid": evidence["pid"], "name": evidence.get("name"), "created": evidence.get("created")}),
+                                 ("quarantine", {"path": evidence.get("exe", "")})):
+                try:
+                    props.append(guardian.propose(kind, target, title))
+                except Refused:
+                    pass
+        if props:
+            socketio.emit("stage", guardian_stage(severity, title, message, props))
+        else:
+            socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)
 
     sync_service = None
@@ -1521,7 +1604,7 @@ if AWARE_OK:
             msgs[0]["content"] += ("\n\n[You are replying to the user's phone. Keep it short and plain. You cannot run commands, "
                                    "open files or change anything on the computer from here; if asked, say that needs the laptop.]")
             try:
-                extra = bridge.context_for(text)
+                extra = "\n".join(x for x in (bridge.context_for(text), projects_db.context_for(text)) if x)
                 if extra:
                     msgs[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
             except Exception:
@@ -1530,7 +1613,7 @@ if AWARE_OK:
             save_history(sid, text, reply)
             return reply
 
-        sync_service = SyncService(people_db.path, notes_db.path, notes_db, reply=_phone_reply,
+        sync_service = SyncService(people_db.path, notes_db.path, notes_db, reply=_phone_reply, projects_path=projects_db.path,
                                    on_ask=lambda t: nudges.nudge(f"phone:{t[:30]}", "medium", "From your phone", t),
                                    on_state=lambda st: socketio.emit("sync_state", st))
         if os.getenv("VANTA_SYNC_PASSPHRASE"):

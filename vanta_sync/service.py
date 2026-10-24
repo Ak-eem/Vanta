@@ -15,9 +15,11 @@ STATE = Path.home() / ".vanta" / "sync_state.json"
 
 class SyncService:
     def __init__(self, people_path: Path, notes_path: Path, notes, on_ask: Callable[[str], None], on_state: Callable[[dict], None],
-                 store: Optional[Store] = None, interval: int = 8, reply: Optional[Callable[[str], str]] = None) -> None:
+                 store: Optional[Store] = None, interval: int = 8, reply: Optional[Callable[[str], str]] = None, projects_path: Optional[Path] = None) -> None:
         self.store = store if store is not None else from_env()
         self.dbs, self.notes, self.on_ask, self.on_state, self.interval = {"people": people_path, "notes": notes_path}, notes, on_ask, on_state, interval
+        if projects_path:
+            self.dbs["projects"] = projects_path
         self.reply_fn, self._busy = reply, False
         self.sync: Optional[Sync] = None
         self.last, self.error = 0.0, ""

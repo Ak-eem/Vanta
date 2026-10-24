@@ -12,7 +12,7 @@ from . import crypto
 from .store import Store
 
 # What syncs. Anything not listed here never leaves the laptop (activity log, screen data, process history).
-TABLES = {"people": "people", "claims": "people", "notes": "notes", "chats": "notes"}
+TABLES = {"people": "people", "claims": "people", "notes": "notes", "chats": "notes", "projects": "projects"}
 VAULT_ID = "_vault"
 
 
@@ -64,7 +64,7 @@ class Sync:
     def push(self) -> int:
         st = self._state()
         out, newest = [], st["pushed"]
-        for table in TABLES:
+        for table in (t for t in TABLES if TABLES[t] in self.dbs):
             with self._conn(table) as c:
                 for r in c.execute(f"SELECT * FROM {table} WHERE CAST(updated_at*1000 AS INTEGER) > ?", (st["pushed"],)):
                     row = dict(r)
@@ -84,7 +84,7 @@ class Sync:
         n, newest = 0, st["pulled"]
         for rec in self.store.pull(st["pulled"]):
             newest = max(newest, rec["updated_at"])
-            if rec["kind"] not in TABLES or rec["device_id"] == self.device:
+            if rec["kind"] not in TABLES or TABLES[rec["kind"]] not in self.dbs or rec["device_id"] == self.device:
                 continue
             row = json.loads(crypto.decrypt(self.key, rec["blob"], rec["id"], rec["kind"]))
             if self._apply(rec["kind"], row):

@@ -48,3 +48,6 @@ export interface Telemetry {
 }
 
 export interface SyncState { configured: boolean; unlocked: boolean; last: number; error: string }
+
+export interface Project { id: string; name: string; folder: string; summary: string; stack: string; status: string; next_step: string; health?: { exists?: boolean; branch?: string; uncommitted?: number; last_commit?: string } }
+export interface GuardianState { quarantined: { id: string; original: string; sha256: string; ts: number }[]; audit: { n: number; ts: number; event: string; detail: Record<string, unknown> }[]; chain_ok: boolean }

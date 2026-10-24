@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
-import type { Approval, Nudge, PrivacyState, SyncState } from '../types'
+import type { Approval, GuardianState, Nudge, PrivacyState, Project, SyncState } from '../types'
+import { ProjectsPanel, SafetyPanel } from './Panels'
 import type { LayoutPref } from '../lib/hudMode'
 import type { Fx } from '../lib/useFx'
 
@@ -59,16 +60,25 @@ function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUn
   </>)
 }
 
-export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow }: {
+export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels }: {
+  projects: Project[]; guardian: GuardianState | null; onSaveProject: (p: Partial<Project>) => void; onRemoveProject: (id: string) => void; onRestore: (id: string) => void; onOpenPanels: () => void
   sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void
   open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void
   layout: LayoutPref; onLayout: (v: LayoutPref) => void; fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
 }) {
+  const [tab, setTab] = useState<'privacy' | 'projects' | 'safety'>('privacy')
+  useEffect(() => { if (open) onOpenPanels() }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <AnimatePresence>
       {open ? (
         <motion.aside className="drawer" initial={{ x: 360 }} animate={{ x: 0 }} exit={{ x: 360 }} transition={{ type: 'tween', duration: 0.22 }} aria-label="Settings">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h3>What I can see</h3><button className="btn ghost sm" onClick={onClose}>Close</button></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h3>{tab === 'privacy' ? 'What I can see' : tab === 'projects' ? 'Projects' : 'Safety log'}</h3><button className="btn ghost sm" onClick={onClose}>Close</button></div>
+          <div className="seg" role="tablist" aria-label="Settings sections" style={{ margin: '10px 0 14px' }}>
+            {(['privacy', 'projects', 'safety'] as const).map((t) => <button key={t} role="tab" aria-checked={tab === t} onClick={() => setTab(t)}>{t === 'privacy' ? 'General' : t === 'projects' ? 'Projects' : 'Safety'}</button>)}
+          </div>
+          {tab === 'projects' ? <ProjectsPanel projects={projects} onSave={onSaveProject} onRemove={onRemoveProject} /> : null}
+          {tab === 'safety' ? <SafetyPanel g={guardian} onRestore={onRestore} /> : null}
+          {tab === 'privacy' ? <>
           <p>You decide. Pausing stops everything at once. Password managers, private windows and banking pages are never read.</p>
           {SOURCES.map((s) => (
             <div className="toggle" key={s.key}>
@@ -84,6 +94,7 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
             <button className="switch" role="switch" aria-label="Light effects" aria-checked={fx === 'low'} onClick={() => onFx(fx === 'low' ? 'full' : 'low')} /></div>
           <SyncPanel sync={sync} onUnlock={onUnlock} onSyncNow={onSyncNow} />
           <div className="toggle" style={{ marginTop: 12 }}><div>Sign out<small>Locks VANTA in this browser.</small></div><a className="btn sm" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }} href="/logout">Sign out</a></div>
+          </> : null}
         </motion.aside>) : null}
     </AnimatePresence>)
 }

@@ -38,7 +38,7 @@ export default function PhoneApp() {
   const [, setCfg] = useState<Cfg | null>(readCfg)
   const [ready, setReady] = useState(false)
   const [data, setData] = useState<Data | null>(null)
-  const [tab, setTab] = useState<'chat' | 'notes' | 'people'>('chat')
+  const [tab, setTab] = useState<'chat' | 'notes' | 'people' | 'projects'>('chat')
   const [text, setText] = useState(''), [msg, setMsg] = useState(''), [draft, setDraft] = useState('')
   const end = useRef<HTMLDivElement>(null)
   const cloud = useRef<Cloud | null>(null), key = useRef<CryptoKey | null>(null)
@@ -117,6 +117,11 @@ export default function PhoneApp() {
           {(data?.notes ?? []).map((n) => (
             <article key={n.id} className="ph-card"><div className="ph-meta">{n.kind === 'ask' ? 'ASK' : 'NOTE'} · {ago(n.created)}<button className="btn ghost sm" onClick={() => del(n)}>Delete</button></div><p>{n.text}</p></article>))}
           {data && !data.notes.length ? <p className="ph-empty">No notes yet.</p> : null}
+        </>) : tab === 'projects' ? (<>
+          {(data?.projects ?? []).map((p) => (
+            <article key={p.id} className="ph-card"><div className="ph-meta">{p.status.toUpperCase()}{p.stack ? ` · ${p.stack}` : ''}</div><h3>{p.name}</h3>
+              {p.summary ? <p>{p.summary}</p> : null}{p.next_step ? <p className="claim">Next: {p.next_step}</p> : null}</article>))}
+          {data && !data.projects.length ? <p className="ph-empty">No projects yet. Add them on your laptop in Settings.</p> : null}
         </>) : (<>
           {(data?.people ?? []).map((p) => (
             <article key={p.id} className="ph-card"><div className="ph-meta">{(p.relation || 'PERSON').toUpperCase()}</div><h3>{p.name}</h3>
@@ -132,6 +137,7 @@ export default function PhoneApp() {
         <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
         <button role="tab" aria-selected={tab === 'notes'} onClick={() => setTab('notes')}>Notes</button>
         <button role="tab" aria-selected={tab === 'people'} onClick={() => setTab('people')}>People</button>
+        <button role="tab" aria-selected={tab === 'projects'} onClick={() => setTab('projects')}>Projects</button>
       </nav>
     </div>)
 }

@@ -6,6 +6,8 @@ connected investigation only appears when there is something to connect.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 import re
 import time
@@ -93,3 +95,22 @@ def alert_stage(severity: str, title: str, message: str) -> dict:
         {"id": "rec", "type": "recommendation", "data": {"title": "Worth a look", "reason": "I haven't changed anything. Tell me if you want me to dig deeper."}},
     ], actions=[{"id": f"ask:Explain what you noticed about: {title}. Is it safe, and what should I do?", "label": "Show me why", "kind": "primary"},
                 {"id": "dismiss", "label": "Ignore once", "kind": "ghost"}], layout="single")
+
+
+def guardian_stage(severity: str, title: str, message: str, proposals: list) -> dict:
+    """An alert that comes with things VANTA could do. Each button is a request you approve by pressing it."""
+    tone = "danger" if severity == "high" else "warn"
+    blocks = [{"id": "what", "type": "text", "title": "What I noticed", "tone": tone, "data": {"body": message}}]
+    actions, ids = [], []
+    for i, p in enumerate(proposals):
+        t = p["target"]
+        if p["kind"] == "end_process":
+            label, line = f"End {str(t.get('name', 'program'))[:24]}", f"Ask {t.get('name')} to stop. Anything unsaved in it is lost."
+        else:
+            label, line = "Quarantine the file", f"Move {Path(str(t.get('path', ''))).name} to a locked folder. Nothing is deleted and you can put it back."
+        blocks.append({"id": f"p{i}", "type": "text", "title": "I can do this", "data": {"body": line + f"  Why: {p['reason']}"}})
+        actions.append({"id": f"guard:approve:{p['id']}", "label": label, "kind": "primary" if i == 0 else "secondary"})
+        ids.append(p["id"])
+    actions.append({"id": "guard:ignore:" + ",".join(ids), "label": "Leave it alone", "kind": "ghost"})
+    blocks.append({"id": "rec", "type": "recommendation", "data": {"title": "Your call", "reason": "I won't do anything unless you press a button. Everything I do is written to the safety log."}})
+    return make_stage(title[:60], blocks, actions=actions, summary=f"{title}. I put what I found and what I can do on the stage.", layout="single")
