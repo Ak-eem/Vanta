@@ -40,3 +40,8 @@ spyware, obfuscated script. Each comes with a plain explanation of what it does 
 - Tested with a ransomware simulator: stopped in under a second, 25 of 320 files affected.
 Not included: running files inside a virtual machine (needs Windows Pro sandbox/Hyper-V and admin rights) and permanent deletion without you:
 files are always quarantined first; **Delete for good** in Settings > Safety removes one permanently when you press it.
+
+## Update: any confirmed malware is stopped automatically
+With Emergency stop on, a **dangerous** verdict on any file (downloaded or already running) means: every running copy is ended (with what it started) and the file is
+quarantined, immediately, with no question and no countdown. Only **suspicious** or **unknown** files wait for you, and verified apps or ones you trust are never touched.
+Afterwards VANTA reports what it did; it only adds advice for the things it cannot do itself (e.g. changing passwords after a password stealer).

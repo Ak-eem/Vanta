@@ -1678,13 +1678,26 @@ if AWARE_OK:
         """Emergency containment: no waiting, no asking. Same safety refusals as always. Everything is logged as 'VANTA (emergency)'.
         targets: [{'pid','name','created','exe'}]. Returns plain sentences about what was done."""
         done = []
+        expanded = []
         for t in targets:
+            if not t.get("pid") and t.get("exe"):          # a flagged file: also stop every copy of it that is running
+                import psutil
+                for pr in psutil.process_iter(["pid", "name", "exe", "create_time"]):
+                    try:
+                        if pr.info["exe"] and os.path.normcase(pr.info["exe"]) == os.path.normcase(t["exe"]):
+                            expanded.append({"pid": pr.info["pid"], "name": pr.info["name"], "exe": t["exe"], "created": pr.info["create_time"]})
+                    except Exception:
+                        continue
+            expanded.append(t)
+        for t in expanded:
             if guard_settings.is_trusted(str(t.get("name", "")), str(t.get("exe", ""))):
                 done.append(f"I left {t.get('name')} alone because you told me to trust it.")
                 continue
-            for kind, target in (("end_process", {"pid": t["pid"], "name": t.get("name"), "created": t.get("created"), "tree": tree}),
+            for kind, target in (("end_process", {"pid": t.get("pid"), "name": t.get("name"), "created": t.get("created"), "tree": tree}),
                                  ("quarantine", {"path": t.get("exe", "")})):
                 if kind == "end_process" and not t.get("pid"):
+                    continue
+                if kind == "quarantine" and not Path(str(t.get("exe", ""))).is_file():
                     continue
                 try:
                     pr = guardian.propose(kind, target, reason)
@@ -1695,7 +1708,7 @@ if AWARE_OK:
         return done
 
     def _announce(title: str, body: str, done: list[str], fam: dict | None) -> None:
-        extra = ("\n\nWhat to do now: " + fam["you"]) if fam else ""
+        extra = ("\n\nOnly thing left for you: " + fam["you"]) if (fam and fam.get("family") in ("keylogger", "infostealer", "backdoor", "banker")) else ""
         socketio.emit("stage", guardian_stage("high", title, body + ("\n\nWhat I did: " + " ".join(done) if done else "") + extra, [], 0))
         socketio.emit("response", {"text": f"{title}. {' '.join(done)}".strip()})
         nudges.nudge(f"emergency:{title[:30]}", "high", title, " ".join(done)[:200] or body[:200])
@@ -1743,8 +1756,9 @@ if AWARE_OK:
         if fam:
             body = f"Type: {fam['family']}. {fam['does']}\n\n" + body + f"\n\nWhat to do: {fam['you']}"
             title = f"{res['name']}: {fam['family']}"
-        if fam and fam["fast"] and res["label"] == "dangerous" and guard_settings.data["emergency"]:
-            done = _contain_now(fam["family"], [{"name": res["name"], "exe": res["path"]}], f"{fam['family']} found by scan")
+        if res["label"] == "dangerous" and guard_settings.data["emergency"]:
+            # Confirmed malware: stop and contain it now. No question, no waiting.
+            done = _contain_now(fam["family"] if fam else "malware", [{"name": res["name"], "exe": res["path"]}], f"{fam['family'] if fam else 'malware'} found by scan")
             _announce(title, body.split("\n\nWhat to do:")[0], done, fam)
             return
         props = []
@@ -1785,6 +1799,9 @@ if AWARE_OK:
             if verdict and verdict["label"] == "safe":
                 activity_log.add("process", "scan_cleared", app=str(evidence.get("name", "")), title=f"{verdict['name']} checked: {'; '.join(verdict['vouched'])}"[:120])
                 return                                                           # a real, verified app: don't bother you, don't touch it
+            if verdict and verdict["label"] == "dangerous" and guard_settings.data["emergency"]:
+                _on_scan(verdict)                                                    # confirmed malware: handled immediately
+                return
             if verdict and verdict["reasons"]:
                 message += "\n\nI also looked inside the file: " + "; ".join(verdict["reasons"][:3]) + "."
         if evidence and evidence.get("pid") and not trusted:

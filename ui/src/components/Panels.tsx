@@ -41,7 +41,7 @@ export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, 
         onClick={() => { if (g.mode === 'auto' || window.confirm('Let VANTA end programs and quarantine files by itself?\n\nIt waits 30 seconds first so you can stop it, never deletes anything, and you can undo file moves. Ending a program loses anything unsaved in it.')) onMode(g.mode === 'auto' ? 'ask' : 'auto') }} />
     </div>
     <div className="toggle">
-      <div>Emergency stop for ransomware and spyware<small>{g.emergency === false ? 'Off. I will only warn you.' : 'On. If I catch ransomware, a keylogger or a password stealer, or see files being locked fast, I stop it immediately, without asking. I leave verified apps and programs you trust alone.'}</small></div>
+      <div>Stop confirmed malware immediately<small>{g.emergency === false ? 'Off. I will only warn you.' : 'On. When I confirm a file is malware (any type), or see files being locked fast, I end it and quarantine it straight away, without asking. Programs I'm only unsure about, verified apps, and ones you trust are never touched without your say-so.'}</small></div>
       <button className="switch" role="switch" aria-label="Emergency stop" aria-checked={g.emergency !== false} onClick={() => onEmergency(g.emergency === false)} />
     </div>
     <p>Files go to a locked folder. Everything is written here.</p>
