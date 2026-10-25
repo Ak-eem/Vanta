@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import type { GuardianState, Project, ScanResult } from '../types'
 
-const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
+const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', project_checked: 'Checked a project', project_fix_applied: 'Applied a fix', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const name = (p: string) => p.split(/[\\/]/).pop() ?? p
 
-export function ProjectsPanel({ projects, onSave, onRemove }: { projects: Project[]; onSave: (p: Partial<Project>) => void; onRemove: (id: string) => void }) {
+export function ProjectsPanel({ projects, onSave, onRemove, onCheck }: { projects: Project[]; onSave: (p: Partial<Project>) => void; onRemove: (id: string) => void; onCheck: (id: string) => void }) {
   const [n, setN] = useState(''), [f, setF] = useState('')
   return (<>
     <p>What you are building. I read these folders (never change them) so I can answer "how is X going?"</p>
@@ -17,7 +17,7 @@ export function ProjectsPanel({ projects, onSave, onRemove }: { projects: Projec
           {p.health?.branch ? `${p.health.branch} · ${p.health.uncommitted ? `${p.health.uncommitted} unsaved change${p.health.uncommitted > 1 ? 's' : ''}` : 'all saved'} · ${p.health.last_commit}` : p.folder && p.health?.exists === false ? 'Folder not found on this computer' : p.stack || ''}
         </div>
         <input className="proj-in" aria-label={`Next step for ${p.name}`} placeholder="Next step…" defaultValue={p.next_step} onBlur={(e) => e.target.value !== p.next_step && onSave({ id: p.id, next_step: e.target.value })} />
-        <button className="btn ghost sm" onClick={() => onRemove(p.id)}>Remove</button>
+        <div style={{ display: 'flex', gap: 8 }}>{p.folder ? <button className="btn sm" onClick={() => onCheck(p.id)}>Test and fix</button> : null}<button className="btn ghost sm" onClick={() => onRemove(p.id)}>Remove</button></div>
       </div>))}
     {!projects.length ? <p>No projects yet.</p> : null}
     <div className="proj add">

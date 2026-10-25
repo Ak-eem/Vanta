@@ -60,7 +60,8 @@ function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUn
   </>)
 }
 
-export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode, scans, onScan, onEmergency, onPurge }: {
+export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode, scans, onScan, onEmergency, onPurge, onCheckProject }: {
+  onCheckProject: (id: string) => void
   onEmergency: (on: boolean) => void; onPurge: (id: string) => void
   scans: ScanResult[]; onScan: (p: string) => void
   onGuardMode: (m: 'ask' | 'auto') => void
@@ -79,7 +80,7 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
           <div className="seg" role="tablist" aria-label="Settings sections" style={{ margin: '10px 0 14px' }}>
             {(['privacy', 'projects', 'safety'] as const).map((t) => <button key={t} role="tab" aria-checked={tab === t} onClick={() => setTab(t)}>{t === 'privacy' ? 'General' : t === 'projects' ? 'Projects' : 'Safety'}</button>)}
           </div>
-          {tab === 'projects' ? <ProjectsPanel projects={projects} onSave={onSaveProject} onRemove={onRemoveProject} /> : null}
+          {tab === 'projects' ? <ProjectsPanel projects={projects} onSave={onSaveProject} onRemove={onRemoveProject} onCheck={onCheckProject} /> : null}
           {tab === 'safety' ? <SafetyPanel g={guardian} onRestore={onRestore} onMode={onGuardMode} scans={scans} onScan={onScan} onEmergency={onEmergency} onPurge={onPurge} /> : null}
           {tab === 'privacy' ? <>
           <p>You decide. Pausing stops everything at once. Password managers, private windows and banking pages are never read.</p>

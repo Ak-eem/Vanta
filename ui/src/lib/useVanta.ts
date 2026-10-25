@@ -199,6 +199,7 @@ export function useVanta() {
     syncUnlock: (passphrase: string) => sock.current?.emit('sync_unlock', { passphrase }),
     loadPanels: () => { sock.current?.emit('projects_get'); sock.current?.emit('guardian_get'); sock.current?.emit('scans_get') },
     scanFile: (path: string) => sock.current?.emit('scan_file', { path }),
+    checkProject: (id: string) => sock.current?.emit('project_check', { id }),
     saveProject: (p: Partial<Project>) => sock.current?.emit('project_save', p),
     removeProject: (id: string) => sock.current?.emit('project_remove', { id }),
     setGuardMode: (mode: 'ask' | 'auto') => sock.current?.emit('guardian_mode', { mode }),

@@ -122,3 +122,23 @@ def guardian_stage(severity: str, title: str, message: str, proposals: list, cou
         rec = {"title": "Your call", "reason": "I won't do anything unless you press a button. Everything I do is written to the safety log."}
     blocks.append({"id": "rec", "type": "recommendation", "data": rec})
     return make_stage(title[:60], blocks, actions=actions, summary=f"{title}. I put what I found and what I can do on the stage.", layout="single")
+
+
+def doctor_stage(rep) -> dict:
+    """Result of a project check: request -> what changed -> test rounds. Buttons only appear when there is something to apply."""
+    steps = []
+    for r in rep.rounds:
+        steps.append({"label": ("Tests passed" if r["passed"] else f"Tests failed" + (f", I changed {r['edits']} spot(s)" if r.get("edits") else "")), "state": "done" if r["passed"] else "active"})
+    ok = rep.status in ("passed", "fixed")
+    blocks = [{"id": "proj", "type": "node", "title": "Project", "data": {"value": rep.project[:40]}},
+              {"id": "chk", "type": "steps", "title": "Test runs", "tone": "good" if ok else "warn", "data": {"items": steps or [{"label": rep.message, "state": "active"}]}}]
+    links = [{"from": "proj", "to": "chk", "label": "tested"}]
+    actions = [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if rep.diff:
+        blocks.insert(1, {"id": "diff", "type": "code", "title": "What I changed", "data": {"filename": "changes.diff", "code": rep.diff[:6000]}})
+        links = [{"from": "proj", "to": "diff", "label": "fixed"}, {"from": "diff", "to": "chk", "label": "re-tested"}]
+        actions = [{"id": f"doctor:apply:{rep.id}", "label": "Apply to my project", "kind": "primary"}, {"id": f"doctor:discard:{rep.id}", "label": "Discard", "kind": "ghost"}]
+    else:
+        blocks.append({"id": "msg", "type": "text", "title": "Result", "tone": "good" if ok else "warn", "data": {"body": rep.message}})
+    summary = {"passed": "All tests pass. Nothing to fix.", "fixed": "I found and fixed the problem in a copy. Nothing in your project has changed yet."}.get(rep.status, rep.message)
+    return make_stage(f"Checked {rep.project}", blocks, links, actions=actions, summary=summary, layout="investigation")

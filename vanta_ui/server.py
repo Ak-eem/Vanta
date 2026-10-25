@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1146,6 +1146,13 @@ def handle_chat(data):
         # Anything else — drop the pending offer, fall through to normal routing
         checklist_pending.pop(sid, None)
 
+    if AWARE_OK and re.search(r"\b(test|check|debug|fix|find (the )?(bugs?|errors?))\b", msg, re.I) and re.search(r"\b(project|app|code|repo)\b", msg, re.I):
+        hit = projects_db.mentioned_in(msg)
+        if hit and hit[0].get("folder"):
+            socketio.emit("response", {"text": f"On it. I'll test {hit[0]['name']} in a copy and tell you what I find. Your files stay untouched unless you approve a fix."}, room=sid)
+            threading.Thread(target=_run_project_check, args=(sid, hit[0]), daemon=True).start()
+            return
+
     socketio.emit("status", {"state": "thinking"}, room=sid)
 
     # ── Parallel: classify + search simultaneously ─────────────────────────
@@ -1364,6 +1371,21 @@ def on_stage_action(data):
     """Buttons on stage cards. `guard:` buttons are approvals for Guardian requests; pressing one is the approval."""
     sid = request.sid
     action = str((data or {}).get("action", ""))
+    if AWARE_OK and action.startswith("doctor:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        item = doctor_reports.pop(rid, None)
+        if verb == "apply" and item:
+            try:
+                written = apply_report(item[0], Path(item[1]))
+                guardian.audit.add("project_fix_applied", rid, project=item[0].project, files=written)
+                socketio.emit("response", {"text": f"Done. I changed {len(written)} file(s) in {item[0].project} and saved the originals in ~/.vanta/doctor_backups."}, room=sid)
+            except Exception as exc:
+                socketio.emit("response", {"text": f"I couldn't apply it: {exc}"}, room=sid)
+        elif verb == "apply":
+            socketio.emit("response", {"text": "That fix has expired. Run the check again."}, room=sid)
+        else:
+            socketio.emit("response", {"text": "Okay, I left your project alone."}, room=sid)
+        return
     if AWARE_OK and action.startswith("guard:"):
         _, verb, rest = (action.split(":", 2) + ["", ""])[:3]
         if verb == "approve":
@@ -1496,6 +1518,39 @@ def on_project_save(data):
     on_projects_get()
 
 
+doctor_reports: dict = {}
+
+
+def _run_project_check(sid: str, proj: dict) -> None:
+    """Tests the project in a copy, tries to fix failures, and puts the result on the stage. Never touches the real folder."""
+    name = proj["name"]
+    socketio.emit("status", {"state": "thinking", "message": f"Checking {name}…"}, room=sid)
+    try:
+        rep = run_doctor(name, Path(proj["folder"] or ""), lambda msgs: call_once(msgs, "CODE", max_tok=1500, temp=0.1),
+                         on_step=lambda m: socketio.emit("status", {"state": "thinking", "message": m}, room=sid))
+        if rep.files:
+            doctor_reports[rep.id] = (rep, proj["folder"])
+        guardian.audit.add("project_checked", rep.id, project=name, status=rep.status)
+        st = doctor_stage(rep)
+        socketio.emit("stage", st, room=sid)
+        socketio.emit("response", {"text": st.get("summary") or rep.message}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"I couldn't check {name}: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+@socketio.on("project_check")
+def on_project_check(data):
+    if not AWARE_OK:
+        return
+    proj = next((p for p in projects_db.all() if p["id"] == str((data or {}).get("id", ""))), None)
+    if not proj or not proj.get("folder"):
+        emit("response", {"text": "Add a folder to that project first so I know where to look."})
+        return
+    threading.Thread(target=_run_project_check, args=(request.sid, proj), daemon=True).start()
+
+
 @socketio.on("project_remove")
 def on_project_remove(data):
     if AWARE_OK:
@@ -1623,6 +1678,7 @@ try:
     from scanner.engine import Scanner, DownloadWatcher, Sweeper
     from guardian.ransomware import RansomwareWatch, WriterTracker, plant_canaries
     from projects.registry import Projects
+    from doctor.fixer import run_doctor, apply_report
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")

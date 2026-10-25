@@ -45,3 +45,9 @@ files are always quarantined first; **Delete for good** in Settings > Safety rem
 With Emergency stop on, a **dangerous** verdict on any file (downloaded or already running) means: every running copy is ended (with what it started) and the file is
 quarantined, immediately, with no question and no countdown. Only **suspicious** or **unknown** files wait for you, and verified apps or ones you trust are never touched.
 Afterwards VANTA reports what it did; it only adds advice for the things it cannot do itself (e.g. changing passwords after a password stealer).
+
+## Project doctor (test and fix)
+Settings > Projects > **Test and fix**, or say "test my Mira project and fix any bugs". VANTA copies the project, runs its tests in the sandbox
+(no network), reads any failure, asks the model for small fixes, applies them to the copy and re-tests (up to 4 rounds). It never edits your tests
+and never leaves the project folder. If it fixes something you see the exact changes and press **Apply to my project**; originals are saved to
+`~/.vanta/doctor_backups`. Supports Python (pytest), Node (`npm test` with an existing `node_modules`) and Go. It tells you plainly when it can't fix something.
