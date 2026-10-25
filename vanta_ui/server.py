@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1146,6 +1146,22 @@ def handle_chat(data):
         # Anything else — drop the pending offer, fall through to normal routing
         checklist_pending.pop(sid, None)
 
+    am = re.match(r"^\s*(?:/agent|agent:)\s*(.+)", msg, re.I | re.S) if AWARE_OK else None
+    if am:
+        goal = am.group(1).strip()
+        hit = projects_db.mentioned_in(goal)
+        root = Path(hit[0]["folder"]) if hit and hit[0].get("folder") and Path(hit[0]["folder"]).is_dir() else Path(WORKSPACE)
+        socketio.emit("response", {"text": f"On it. I'll work in {root.name} ({guard_settings.data.get('agent_mode', 'ask')} mode). Say stop any time, and I can undo my changes afterwards."}, room=sid)
+        threading.Thread(target=_run_agent, args=(sid, goal, root), daemon=True).start()
+        return
+
+    if AWARE_OK and re.search(r"\b(test|check|debug|fix|find (the )?(bugs?|errors?))\b", msg, re.I) and re.search(r"\b(project|app|code|repo)\b", msg, re.I):
+        hit = projects_db.mentioned_in(msg)
+        if hit and hit[0].get("folder"):
+            socketio.emit("response", {"text": f"On it. I'll test {hit[0]['name']} in a copy and tell you what I find. Your files stay untouched unless you approve a fix."}, room=sid)
+            threading.Thread(target=_run_project_check, args=(sid, hit[0]), daemon=True).start()
+            return
+
     socketio.emit("status", {"state": "thinking"}, room=sid)
 
     # ── Parallel: classify + search simultaneously ─────────────────────────
@@ -1205,7 +1221,7 @@ def handle_chat(data):
     if AWARE_OK:
         try:
             bridge.note_claims(msg)
-            extra = bridge.context_for(msg)
+            extra = "\n".join(x for x in (bridge.context_for(msg), projects_db.context_for(msg)) if x)
             if extra:
                 messages[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
         except Exception as exc:
@@ -1361,11 +1377,258 @@ def handle_orchestrate(data):
 
 @socketio.on("stage_action")
 def on_stage_action(data):
-    """Buttons on stage cards. Today only chat shortcuts (ask:) and dismiss exist client-side;
-    anything else is acknowledged calmly rather than silently ignored."""
+    """Buttons on stage cards. `guard:` buttons are approvals for Guardian requests; pressing one is the approval."""
     sid = request.sid
-    print(f"[stage] action {data!r}")
+    action = str((data or {}).get("action", ""))
+    if AWARE_OK and action.startswith("agent:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        ag = agents.get(rid)
+        if verb == "stop" and ag:
+            ag.stop = True
+        elif verb == "undo" and ag:
+            back = ag.rewind()
+            guardian.audit.add("agent_undo", rid, files=back)
+            socketio.emit("response", {"text": f"Undone. I put back {len(back)} file(s) exactly as they were."}, room=sid)
+        return
+    if AWARE_OK and action.startswith("doctor:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        item = doctor_reports.pop(rid, None)
+        if verb == "apply" and item:
+            try:
+                written = apply_report(item[0], Path(item[1]))
+                guardian.audit.add("project_fix_applied", rid, project=item[0].project, files=written)
+                socketio.emit("response", {"text": f"Done. I changed {len(written)} file(s) in {item[0].project} and saved the originals in ~/.vanta/doctor_backups."}, room=sid)
+            except Exception as exc:
+                socketio.emit("response", {"text": f"I couldn't apply it: {exc}"}, room=sid)
+        elif verb == "apply":
+            socketio.emit("response", {"text": "That fix has expired. Run the check again."}, room=sid)
+        else:
+            socketio.emit("response", {"text": "Okay, I left your project alone."}, room=sid)
+        return
+    if AWARE_OK and action.startswith("guard:"):
+        _, verb, rest = (action.split(":", 2) + ["", ""])[:3]
+        if verb == "approve":
+            try:
+                res = guardian.approve(rest)
+                done = ("Done. I moved it to the locked quarantine folder. You can put it back from Settings > Safety."
+                        if "quarantine_id" in res else f"Done. I asked {res.get('ended', 'it')} to stop.")
+                socketio.emit("response", {"text": done}, room=sid)
+            except Refused as exc:
+                socketio.emit("response", {"text": str(exc)}, room=sid)
+            _emit_guardian_state()
+        elif verb in ("ignore", "stop"):
+            ids = [i for i in rest.split(",") if i]
+            autopilot.stop(ids)
+            socketio.emit("response", {"text": "Okay, I'll leave it alone."}, room=sid)
+        elif verb == "trust":
+            for i in filter(None, rest.split(",")):
+                pr = guardian.pending.get(i)
+                if pr:
+                    t = pr["target"]
+                    guard_settings.trust(str(t.get("name") or t.get("path") or ""))
+                    if pr["kind"] == "quarantine":
+                        guard_settings.trust(str(t.get("path", "")))
+            autopilot.stop([i for i in rest.split(",") if i])
+            socketio.emit("response", {"text": "Okay, I'll trust that program from now on."}, room=sid)
+        return
     socketio.emit("response", {"text": "I can't do that one yet. For now I can look into it and tell you what I find."}, room=sid)
+
+
+def _emit_guardian_state():
+    if AWARE_OK:
+        socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None,
+                                         "mode": guard_settings.data["mode"], "emergency": guard_settings.data["emergency"], "agent_mode": guard_settings.data.get("agent_mode", "ask"), "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
+
+
+@socketio.on("guardian_get")
+def on_guardian_get():
+    _emit_guardian_state()
+
+
+@socketio.on("scans_get")
+def on_scans_get():
+    if AWARE_OK:
+        emit("scans", scanner_obj.recent(30))
+
+
+@socketio.on("scan_file")
+def on_scan_file(data):
+    """Scan one file on request. Read-only: the file is inspected, never run or moved."""
+    if not AWARE_OK:
+        return
+    p = Path(str((data or {}).get("path", "")).strip().strip('"')).expanduser()
+    if not p.is_file():
+        emit("response", {"text": "I can't find a file at that path."})
+        return
+    sid = request.sid
+    def work():
+        try:
+            _on_scan(scanner_obj.scan(p, force=True))
+            socketio.emit("scans", scanner_obj.recent(30), room=sid)
+        except Exception as exc:
+            socketio.emit("response", {"text": f"I couldn't scan that: {exc}"}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+@socketio.on("agent_mode")
+def on_agent_mode(data):
+    if AWARE_OK:
+        guard_settings.set_agent_mode(str((data or {}).get("mode", "ask")))
+        _emit_guardian_state()
+
+
+@socketio.on("guardian_emergency")
+def on_guardian_emergency(data):
+    if AWARE_OK:
+        on = bool((data or {}).get("on"))
+        guard_settings.set_emergency(on)
+        if ransom_watch:
+            ransom_watch.enabled = on
+        guardian.audit.add("emergency_changed", "", on=on, by="you")
+        _emit_guardian_state()
+
+
+@socketio.on("guardian_purge")
+def on_guardian_purge(data):
+    """Permanently delete one quarantined file. Only ever from quarantine, only on a button press."""
+    if not AWARE_OK:
+        return
+    try:
+        p = guardian.propose("purge", {"id": str((data or {}).get("id", ""))}, "You asked to delete it for good")
+        guardian.approve(p["id"])
+        emit("response", {"text": "Deleted for good."})
+    except Refused as exc:
+        emit("response", {"text": str(exc)})
+    _emit_guardian_state()
+
+
+@socketio.on("guardian_mode")
+def on_guardian_mode(data):
+    if AWARE_OK:
+        guard_settings.set_mode("auto" if (data or {}).get("mode") == "auto" else "ask")
+        guardian.audit.add("mode_changed", "", mode=guard_settings.data["mode"], by="you")
+        _emit_guardian_state()
+
+
+@socketio.on("guardian_restore")
+def on_guardian_restore(data):
+    if not AWARE_OK:
+        return
+    try:
+        p = guardian.propose("restore", {"id": str((data or {}).get("id", ""))}, "You asked to put it back")
+        guardian.approve(p["id"])
+        emit("response", {"text": "Put it back where it was."})
+    except Refused as exc:
+        emit("response", {"text": str(exc)})
+    _emit_guardian_state()
+
+
+@socketio.on("projects_get")
+def on_projects_get():
+    if AWARE_OK:
+        emit("projects", [{**p, "health": projects_db.health(p)} for p in projects_db.all()])
+
+
+@socketio.on("project_save")
+def on_project_save(data):
+    if not AWARE_OK:
+        return
+    d = data or {}
+    try:
+        if d.get("id"):
+            projects_db.update(str(d["id"]), **{k: str(d[k])[:400] for k in ("summary", "status", "next_step", "folder") if k in d})
+        else:
+            projects_db.add(str(d.get("name", "")), str(d.get("folder", "")), str(d.get("summary", "")))
+    except ValueError as exc:
+        emit("response", {"text": str(exc)})
+    on_projects_get()
+
+
+doctor_reports: dict = {}
+agents: dict = {}
+
+
+def _run_agent(sid: str, goal: str, root: Path) -> None:
+    """Runs the agent loop for a goal. Edits and commands follow the permission mode; every approval is a pop-up you answer."""
+    mode = guard_settings.data.get("agent_mode", "ask")
+    ag = None
+    def push(working: bool):
+        socketio.emit("stage", agent_stage(ag.run, working), room=sid)
+    ag = Agent(lambda msgs: call_once(msgs, "CODE", max_tok=1200, temp=0.2), root, mode,
+               approve=lambda action, detail: request_approval(sid, action, detail),
+               ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
+               web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
+               on_step=lambda st: push(True))
+    agents[ag.run.id] = ag
+    socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
+    try:
+        push(True)
+        run = ag.execute(goal)
+        guardian.audit.add("agent_run", run.id, goal=goal[:100], status=run.status, changed=run.changed, mode=mode)
+        push(False)
+        socketio.emit("response", {"text": run.final or "Finished."}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The agent hit a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _run_project_check(sid: str, proj: dict) -> None:
+    """Tests the project in a copy, tries to fix failures, and puts the result on the stage. Never touches the real folder."""
+    name = proj["name"]
+    socketio.emit("status", {"state": "thinking", "message": f"Checking {name}…"}, room=sid)
+    try:
+        rep = run_doctor(name, Path(proj["folder"] or ""), lambda msgs: call_once(msgs, "CODE", max_tok=1500, temp=0.1),
+                         on_step=lambda m: socketio.emit("status", {"state": "thinking", "message": m}, room=sid))
+        if rep.files:
+            doctor_reports[rep.id] = (rep, proj["folder"])
+        guardian.audit.add("project_checked", rep.id, project=name, status=rep.status)
+        st = doctor_stage(rep)
+        socketio.emit("stage", st, room=sid)
+        socketio.emit("response", {"text": st.get("summary") or rep.message}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"I couldn't check {name}: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+@socketio.on("project_check")
+def on_project_check(data):
+    if not AWARE_OK:
+        return
+    proj = next((p for p in projects_db.all() if p["id"] == str((data or {}).get("id", ""))), None)
+    if not proj or not proj.get("folder"):
+        emit("response", {"text": "Add a folder to that project first so I know where to look."})
+        return
+    threading.Thread(target=_run_project_check, args=(request.sid, proj), daemon=True).start()
+
+
+@socketio.on("project_remove")
+def on_project_remove(data):
+    if AWARE_OK:
+        projects_db.remove(str((data or {}).get("id", "")))
+        on_projects_get()
+
+
+@socketio.on("sync_get")
+def on_sync_get():
+    emit("sync_state", sync_service.status() if AWARE_OK and sync_service else {"configured": False, "unlocked": False, "last": 0, "error": ""})
+
+
+@socketio.on("sync_unlock")
+def on_sync_unlock(data):
+    if AWARE_OK and sync_service:
+        pw = str((data or {}).get("passphrase", ""))
+        if len(pw) >= 8:
+            sync_service.unlock(pw)
+        else:
+            emit("sync_state", {**sync_service.status(), "error": "Use at least 8 characters."})
+
+
+@socketio.on("sync_now")
+def on_sync_now():
+    if AWARE_OK and sync_service:
+        threading.Thread(target=sync_service.run_once, daemon=True).start()
 
 
 @socketio.on("privacy_get")
@@ -1461,12 +1724,21 @@ try:
     from awareness.memory_bridge import MemoryBridge
     from awareness.tray import Tray
     from vanta_knowledge.people import People
+    from guardian.actions import Guardian, Refused
+    from guardian.audit import AuditLog
+    from guardian.auto import Autopilot, Settings as GuardSettings
+    from scanner.engine import Scanner, DownloadWatcher, Sweeper
+    from guardian.ransomware import RansomwareWatch, WriterTracker, plant_canaries
+    from projects.registry import Projects
+    from doctor.fixer import run_doctor, apply_report
+    from agent.loop import Agent
+    from agent.checkpoints import Checkpoints
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1474,14 +1746,225 @@ if AWARE_OK:
     privacy = PrivacyState()
     activity_log = ActivityLog(privacy)
     people_db = People()
+    projects_db = Projects()
+    guardian = Guardian(AuditLog())
+    guard_settings = GuardSettings()
+
+    def _auto_notify(kind, d):
+        p = d["proposal"]; t = p["target"]
+        what = f"stop {t.get('name', 'that program')}" if p["kind"] == "end_process" else f"quarantine {Path(str(t.get('path', ''))).name}"
+        if kind == "done":
+            msg = f"I went ahead and {'asked ' + str(t.get('name')) + ' to stop' if p['kind'] == 'end_process' else 'moved ' + Path(str(t.get('path', ''))).name + ' to quarantine'}. You can undo file moves in Settings > Safety."
+        elif kind == "held":
+            msg = f"I didn't {what}. {d['why']}"
+        else:
+            msg = f"I tried to {what} but couldn't: {d['why']}"
+        socketio.emit("response", {"text": msg})
+        nudges.nudge(f"auto:{p['id']}", "medium", "VANTA acted on its own" if kind == "done" else "Needs your decision", msg)
+        _emit_guardian_state()
+
+    autopilot = Autopilot(guardian, guard_settings, _auto_notify)
+
+    def _explain(facts: dict) -> str:
+        """Plain-language 'what is this and what is it for', from the scan facts plus a quick web look-up of the name."""
+        research = ""
+        try:
+            if GOOGLE_OK:
+                research = get_google(f"what is {facts['name']} {facts.get('publisher', '')} software program") or ""
+        except Exception:
+            pass
+        brief = {k: facts.get(k) for k in ("name", "kind", "size", "publisher", "label", "reasons", "vouched", "inside", "strings")}
+        msgs = [{"role": "system", "content": "You explain downloaded files to a non-technical person. Use ONLY the facts and search notes given. "
+                 "In at most 3 short sentences say what this probably is, what it is normally used for, and whether anything looks off. "
+                 "If you are not sure, say so plainly. Never claim a file is safe or malicious beyond the stated verdict."},
+                {"role": "user", "content": f"Facts: {json.dumps(brief, default=str)[:1800]}\n\nCode/script excerpt:\n{(facts.get('text') or '')[:2500]}\n\nWeb notes:\n{research[:1500]}"}]
+        return call_once(msgs, "CHAT", max_tok=220, temp=0.2).strip()
+
+    scanner_obj = Scanner(explain=_explain, is_trusted=lambda r: guard_settings.is_trusted(r.get("name", ""), r.get("path", ""), (r.get("signature") or {}).get("publisher", "")))
+
+    _exe_safe: dict = {}
+
+    def _contain_now(kind_label: str, targets: list, reason: str, family: dict | None = None, tree: bool = True) -> list[str]:
+        """Emergency containment: no waiting, no asking. Same safety refusals as always. Everything is logged as 'VANTA (emergency)'.
+        targets: [{'pid','name','created','exe'}]. Returns plain sentences about what was done."""
+        done = []
+        expanded = []
+        for t in targets:
+            if not t.get("pid") and t.get("exe"):          # a flagged file: also stop every copy of it that is running
+                import psutil
+                for pr in psutil.process_iter(["pid", "name", "exe", "create_time"]):
+                    try:
+                        if pr.info["exe"] and os.path.normcase(pr.info["exe"]) == os.path.normcase(t["exe"]):
+                            expanded.append({"pid": pr.info["pid"], "name": pr.info["name"], "exe": t["exe"], "created": pr.info["create_time"]})
+                    except Exception:
+                        continue
+            expanded.append(t)
+        for t in expanded:
+            if guard_settings.is_trusted(str(t.get("name", "")), str(t.get("exe", ""))):
+                done.append(f"I left {t.get('name')} alone because you told me to trust it.")
+                continue
+            for kind, target in (("end_process", {"pid": t.get("pid"), "name": t.get("name"), "created": t.get("created"), "tree": tree}),
+                                 ("quarantine", {"path": t.get("exe", "")})):
+                if kind == "end_process" and not t.get("pid"):
+                    continue
+                if kind == "quarantine" and not Path(str(t.get("exe", ""))).is_file():
+                    continue
+                try:
+                    pr = guardian.propose(kind, target, reason)
+                    guardian.approve(pr["id"], who="VANTA (emergency)")
+                    done.append(f"Stopped {t.get('name')} and everything it started." if kind == "end_process" else f"Quarantined {Path(str(t.get('exe'))).name}.")
+                except Refused as exc:
+                    done.append(f"Couldn't {('stop ' + str(t.get('name'))) if kind == 'end_process' else 'quarantine the file'}: {exc}")
+        return done
+
+    def _announce(title: str, body: str, done: list[str], fam: dict | None) -> None:
+        extra = ("\n\nOnly thing left for you: " + fam["you"]) if (fam and fam.get("family") in ("keylogger", "infostealer", "backdoor", "banker")) else ""
+        socketio.emit("stage", guardian_stage("high", title, body + ("\n\nWhat I did: " + " ".join(done) if done else "") + extra, [], 0))
+        socketio.emit("response", {"text": f"{title}. {' '.join(done)}".strip()})
+        nudges.nudge(f"emergency:{title[:30]}", "high", title, " ".join(done)[:200] or body[:200])
+        _emit_guardian_state()
+
+    def _on_ransom(writers: list, sig: dict) -> None:
+        safe = []
+        for w in writers:
+            # Speed matters here, so use what the background sweep already learned; never hash a program while files are burning.
+            if _exe_safe.get(str(w.get("exe") or "")) == "safe":
+                continue                                   # a verified, signed app: alert instead of killing
+            safe.append(w)
+        why = ", ".join({"canary": "a decoy file was changed", "burst": f"{sig['files']} files changed in seconds", "rename": f"files renamed to {sig.get('ext') or 'a new ending'}", "notes": "ransom-style notes appeared in several folders"}[k] for k in sig["why"])
+        fam = {"you": "Disconnect from Wi-Fi, don't pay anything, and check your backups. Ask me which files changed."}
+        if not safe:
+            _announce("Files are being changed very fast", f"Signs of ransomware: {why}. The program doing it looks like a verified app, so I did not stop it. Check that this is something you started.", [], fam)
+            return
+        done = _contain_now("ransomware", safe, f"ransomware behaviour: {why}")
+        _announce("I stopped something that looked like ransomware", f"Signs: {why}. Culprit: {', '.join(w['name'] for w in safe)}.", done, fam)
+
+    def _on_ransom_unknown(sig: dict) -> None:
+        _announce("Files are being changed very fast", f"Signs of ransomware ({sig['files']} files in {sig['dirs']} folders), but I couldn't tell which program is doing it, so I didn't stop anything. If you didn't start this, disconnect from Wi-Fi and shut the computer down.", [], {"you": "Disconnect from Wi-Fi and don't pay anything."})
+
+    try:
+        _prot = [Path.home() / d for d in ("Documents", "Desktop", "Pictures", "Downloads")]
+        _prot = [d for d in _prot if d.is_dir()]
+        writer_tracker = WriterTracker()
+        ransom_watch = RansomwareWatch(plant_canaries(_prot) if guard_settings.data["emergency"] else [], writer_tracker, _on_ransom, _on_ransom_unknown)
+        ransom_watch.enabled = bool(guard_settings.data["emergency"])
+        ransom_watch._folders = _prot
+    except Exception as _re:
+        print(f"[ransomware] watch unavailable: {_re}")
+
+    def _on_scan(res: dict) -> None:
+        """Called for every finished scan. Safe files stay quiet; anything else is shown, and risky files come with actions."""
+        socketio.emit("scan_result", res)
+        if res["label"] == "safe":
+            return
+        if res["label"] == "unknown" and res.get("kind") not in ("windows program", "linux program", "script"):
+            return
+        title = {"dangerous": f"{res['name']} looks dangerous", "suspicious": f"{res['name']} looks suspicious", "unknown": f"I checked {res['name']}"}[res["label"]]
+        fam = res.get("family")
+        body = (res.get("about") or "") + ("\n\n" if res.get("about") else "") + (
+            "What I found: " + "; ".join(res["reasons"]) if res["reasons"] else "No red flags found, but I couldn't confirm who made it.")
+        if fam:
+            body = f"Type: {fam['family']}. {fam['does']}\n\n" + body + f"\n\nWhat to do: {fam['you']}"
+            title = f"{res['name']}: {fam['family']}"
+        if res["label"] == "dangerous" and guard_settings.data["emergency"]:
+            # Confirmed malware: stop and contain it now. No question, no waiting.
+            done = _contain_now(fam["family"] if fam else "malware", [{"name": res["name"], "exe": res["path"]}], f"{fam['family'] if fam else 'malware'} found by scan")
+            _announce(title, body.split("\n\nWhat to do:")[0], done, fam)
+            return
+        props = []
+        if res["label"] in ("dangerous", "suspicious"):
+            try:
+                props.append(guardian.propose("quarantine", {"path": res["path"]}, "; ".join(res["reasons"][:2]) or "flagged by my scan"))
+            except Refused:
+                pass
+        secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and res.get("act") and props) else 0
+        socketio.emit("stage", guardian_stage("high" if res["label"] == "dangerous" else "medium", title, body, props, secs) if props else
+                      guardian_stage("medium", title, body, []))
+        if secs:
+            autopilot.schedule(props)
+        nudges.nudge(f"scan:{res['sha256'][:12]}", "high" if res["label"] == "dangerous" else "medium" if props else "low", title, (res["reasons"] or ["Couldn't verify the publisher."])[0])
+        _emit_guardian_state()
+
+    _dl = Path(os.getenv("VANTA_SCAN_FOLDERS", str(Path.home() / "Downloads"))).expanduser()
+    download_watcher = DownloadWatcher(scanner_obj, [Path(x) for x in os.getenv("VANTA_SCAN_FOLDERS", str(_dl)).split(os.pathsep)], _on_scan)
+    def _on_sweep(r: dict) -> None:
+        _exe_safe[r["path"]] = r["label"]
+        if r["label"] in ("dangerous", "suspicious"):
+            _on_scan(r)
+    sweeper = Sweeper(scanner_obj, _on_sweep)
     bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
     nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
     privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
 
-    def _on_process_alert(severity, title, message, source):
+    def _on_process_alert(severity, title, message, source, evidence=None):
         sev = {"high": "high", "medium": "medium"}.get(severity, "low")
-        socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
+        props = []
+        trusted = bool(evidence) and guard_settings.is_trusted(str(evidence.get("name", "")), str(evidence.get("exe", "")))
+        verdict = None
+        if evidence and evidence.get("exe") and not trusted:
+            try:
+                verdict = scanner_obj.scan(Path(evidence["exe"]), explain=False)       # look inside before deciding anything
+            except Exception:
+                verdict = None
+            if verdict and verdict["label"] == "safe":
+                activity_log.add("process", "scan_cleared", app=str(evidence.get("name", "")), title=f"{verdict['name']} checked: {'; '.join(verdict['vouched'])}"[:120])
+                return                                                           # a real, verified app: don't bother you, don't touch it
+            if verdict and verdict["label"] == "dangerous" and guard_settings.data["emergency"]:
+                _on_scan(verdict)                                                    # confirmed malware: handled immediately
+                return
+            if verdict and verdict["reasons"]:
+                message += "\n\nI also looked inside the file: " + "; ".join(verdict["reasons"][:3]) + "."
+        if evidence and evidence.get("pid") and not trusted:
+            # Offer containment, never perform it. Each proposal is checked now and again when you approve.
+            for kind, target in (("end_process", {"pid": evidence["pid"], "name": evidence.get("name"), "created": evidence.get("created")}),
+                                 ("quarantine", {"path": evidence.get("exe", "")})):
+                try:
+                    props.append(guardian.propose(kind, target, title))
+                except Refused:
+                    pass
+        if props:
+            # Autopilot only acts on its own when my scan is confident. Unknown files are always left for you.
+            secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and verdict and verdict.get("act")) else 0
+            socketio.emit("stage", guardian_stage(severity, title, message, props, secs))
+            if secs:
+                autopilot.schedule(props)
+        else:
+            socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)
+
+    sync_service = None
+    try:
+        from vanta_knowledge.notes import Notes
+        from vanta_sync.service import SyncService
+        notes_db = Notes()
+        def _phone_reply(text: str) -> str:
+            """Text-only answers for the phone. No files, no commands, no approvals: nothing here can act on the laptop."""
+            sid = "phone"
+            try:
+                rag = get_rag(text)
+            except Exception:
+                rag = ""
+            effort = pick_reasoning_effort("CHAT", False, False, False, bool(conversations.get(sid)))
+            msgs = build_prompt(sid, text, "CHAT", rag, "", effort)
+            msgs[0]["content"] += ("\n\n[You are replying to the user's phone. Keep it short and plain. You cannot run commands, "
+                                   "open files or change anything on the computer from here; if asked, say that needs the laptop.]")
+            try:
+                extra = "\n".join(x for x in (bridge.context_for(text), projects_db.context_for(text)) if x)
+                if extra:
+                    msgs[0]["content"] += "\n\n[Personal context, use only if relevant]\n" + extra
+            except Exception:
+                pass
+            reply = call_once(msgs, "CHAT", reasoning_effort=effort)
+            save_history(sid, text, reply)
+            return reply
+
+        sync_service = SyncService(people_db.path, notes_db.path, notes_db, reply=_phone_reply, projects_path=projects_db.path,
+                                   on_ask=lambda t: nudges.nudge(f"phone:{t[:30]}", "medium", "From your phone", t),
+                                   on_state=lambda st: socketio.emit("sync_state", st))
+        if os.getenv("VANTA_SYNC_PASSPHRASE"):
+            threading.Thread(target=lambda: sync_service.unlock(os.environ["VANTA_SYNC_PASSPHRASE"]), daemon=True).start()
+    except Exception as _se:
+        print(f"[sync] unavailable: {_se}")
 
     proc_watcher = ProcessWatcher(activity_log, _on_process_alert)
     window_watcher = WindowWatcher(activity_log)
@@ -1492,6 +1975,30 @@ def start_awareness(port: int) -> None:
     if not AWARE_OK:
         return
     proc_watcher.start()
+    if download_watcher:
+        download_watcher.start()
+        sweeper.start()
+    if ransom_watch and ransom_watch.canaries:
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+
+            class _RH(FileSystemEventHandler):
+                def on_modified(self, e):
+                    if not e.is_directory: ransom_watch.on_event("modified", e.src_path)
+                def on_created(self, e):
+                    if not e.is_directory: ransom_watch.on_event("created", e.src_path)
+                def on_deleted(self, e):
+                    if not e.is_directory: ransom_watch.on_event("deleted", e.src_path)
+                def on_moved(self, e):
+                    if not e.is_directory: ransom_watch.on_event("moved", e.src_path, e.dest_path)
+            _ro = Observer(); _ro.daemon = True
+            for _d in getattr(ransom_watch, "_folders", []):
+                _ro.schedule(_RH(), str(_d), recursive=True)
+            _ro.start()
+            threading.Thread(target=lambda: [(writer_tracker.sample(), time.sleep(2)) for _ in iter(int, 1)], name="vanta-writers", daemon=True).start()
+        except Exception as exc:
+            print(f"[ransomware] folder watching unavailable: {exc}")
     window_watcher.start()
     screen_watcher.start()          # stays idle unless the 'screen' source is switched on
     global tray

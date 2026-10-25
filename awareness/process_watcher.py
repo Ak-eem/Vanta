@@ -25,7 +25,7 @@ BASELINE_PATH = Path.home() / ".vanta" / "proc_baseline.json"
 SUSPECT_DIRS = ("\\temp\\", "/tmp/", "\\appdata\\local\\temp", "\\downloads\\", "/downloads/", "\\$recycle.bin")
 SYSTEM_QUIET = {"system", "system idle process", "registry", "idle"}
 
-Alert = Callable[[str, str, str, str], None]  # severity, title, message, source
+Alert = Callable[..., None]  # severity, title, message, source, evidence(dict, optional)
 
 
 def _list_procs() -> list[dict]:
@@ -73,7 +73,7 @@ class ProcessWatcher:
     def learning(self) -> bool:
         return self.clock() - self.baseline["started"] < self.learn_seconds
 
-    def _raise(self, severity: str, title: str, msg: str, key: tuple) -> None:
+    def _raise(self, severity: str, title: str, msg: str, key: tuple, evidence: Optional[dict] = None) -> None:
         now = self.clock()
         last = self._alerted.get(key)
         if last is not None and now - last < 3600:   # once per hour per finding
@@ -81,7 +81,7 @@ class ProcessWatcher:
         self._alerted[key] = now
         self.log.add("process", "alert", app=key[1], title=title, detail={"severity": severity, "message": msg})
         if self.alert:
-            self.alert(severity, title, msg, "process")
+            self.alert(severity, title, msg, "process", evidence)
 
     def tick(self) -> None:
         procs = self.lister()
@@ -100,14 +100,14 @@ class ProcessWatcher:
                 if exe and any(d in exe for d in SUSPECT_DIRS) and name not in self._names:
                     self._raise("medium", f"Unfamiliar program running from {Path(exe).parent.name or 'temp'}",
                                 f"{name} is running from {exe}. Programs launched from temp or download folders are a common malware pattern.",
-                                ("path", name))
+                                ("path", name), {"pid": pid, "name": name, "exe": p.get("exe") or "", "created": p.get("create_time")})
             cpu = p.get("cpu_percent") or 0.0
             if cpu >= self.cpu_limit and name not in self._names and name not in SYSTEM_QUIET:
                 self._hot[pid] = self._hot.get(pid, 0) + 1
                 if self._hot[pid] >= self.cpu_polls:
                     self._raise("medium", f"{name} is using {int(cpu)}% CPU",
                                 f"{name} (pid {pid}) has been pinning the CPU and isn't part of your normal programs. Could be a runaway process or a miner.",
-                                ("cpu", name))
+                                ("cpu", name), {"pid": pid, "name": name, "exe": p.get("exe") or "", "created": p.get("create_time")})
             else:
                 self._hot.pop(pid, None)
         self._seen_pids &= live

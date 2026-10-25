@@ -6,6 +6,8 @@ connected investigation only appears when there is something to connect.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 import re
 import time
@@ -93,3 +95,79 @@ def alert_stage(severity: str, title: str, message: str) -> dict:
         {"id": "rec", "type": "recommendation", "data": {"title": "Worth a look", "reason": "I haven't changed anything. Tell me if you want me to dig deeper."}},
     ], actions=[{"id": f"ask:Explain what you noticed about: {title}. Is it safe, and what should I do?", "label": "Show me why", "kind": "primary"},
                 {"id": "dismiss", "label": "Ignore once", "kind": "ghost"}], layout="single")
+
+
+def guardian_stage(severity: str, title: str, message: str, proposals: list, countdown: int = 0) -> dict:
+    """An alert that comes with things VANTA could do. Each button is a request you approve by pressing it."""
+    tone = "danger" if severity == "high" else "warn"
+    blocks = [{"id": "what", "type": "text", "title": "What I noticed", "tone": tone, "data": {"body": message}}]
+    actions, ids = [], []
+    for i, p in enumerate(proposals):
+        t = p["target"]
+        if p["kind"] == "end_process":
+            label, line = f"End {str(t.get('name', 'program'))[:24]}", f"Ask {t.get('name')} to stop. Anything unsaved in it is lost."
+        else:
+            label, line = "Quarantine the file", f"Move {Path(str(t.get('path', ''))).name} to a locked folder. Nothing is deleted and you can put it back."
+        blocks.append({"id": f"p{i}", "type": "text", "title": "I can do this", "data": {"body": line + f"  Why: {p['reason']}"}})
+        actions.append({"id": f"guard:approve:{p['id']}", "label": label, "kind": "primary" if i == 0 else "secondary"})
+        ids.append(p["id"])
+    if countdown:
+        actions = [{"id": "guard:stop:" + ",".join(ids), "label": "Stop, don't do it", "kind": "primary"}] + \
+                  [{**a, "label": "Do it now: " + a["label"], "kind": "secondary"} for a in actions] + \
+                  [{"id": "guard:trust:" + ",".join(ids), "label": "Always trust this program", "kind": "ghost"}]
+        rec = {"title": f"I'll do this on my own in {countdown} seconds", "reason": "Autopilot is on. Press Stop to cancel. Everything I do is written to the safety log and can be undone for files."}
+    else:
+        actions.append({"id": "guard:ignore:" + ",".join(ids), "label": "Leave it alone", "kind": "ghost"})
+        actions.append({"id": "guard:trust:" + ",".join(ids), "label": "Always trust this program", "kind": "ghost"})
+        rec = {"title": "Your call", "reason": "I won't do anything unless you press a button. Everything I do is written to the safety log."}
+    blocks.append({"id": "rec", "type": "recommendation", "data": rec})
+    return make_stage(title[:60], blocks, actions=actions, summary=f"{title}. I put what I found and what I can do on the stage.", layout="single")
+
+
+def doctor_stage(rep) -> dict:
+    """Result of a project check: request -> what changed -> test rounds. Buttons only appear when there is something to apply."""
+    steps = []
+    for r in rep.rounds:
+        steps.append({"label": ("Tests passed" if r["passed"] else f"Tests failed" + (f", I changed {r['edits']} spot(s)" if r.get("edits") else "")), "state": "done" if r["passed"] else "active"})
+    ok = rep.status in ("passed", "fixed")
+    blocks = [{"id": "proj", "type": "node", "title": "Project", "data": {"value": rep.project[:40]}},
+              {"id": "chk", "type": "steps", "title": "Test runs", "tone": "good" if ok else "warn", "data": {"items": steps or [{"label": rep.message, "state": "active"}]}}]
+    links = [{"from": "proj", "to": "chk", "label": "tested"}]
+    actions = [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if rep.diff:
+        blocks.insert(1, {"id": "diff", "type": "code", "title": "What I changed", "data": {"filename": "changes.diff", "code": rep.diff[:6000]}})
+        links = [{"from": "proj", "to": "diff", "label": "fixed"}, {"from": "diff", "to": "chk", "label": "re-tested"}]
+        actions = [{"id": f"doctor:apply:{rep.id}", "label": "Apply to my project", "kind": "primary"}, {"id": f"doctor:discard:{rep.id}", "label": "Discard", "kind": "ghost"}]
+    else:
+        blocks.append({"id": "msg", "type": "text", "title": "Result", "tone": "good" if ok else "warn", "data": {"body": rep.message}})
+    summary = {"passed": "All tests pass. Nothing to fix.", "fixed": "I found and fixed the problem in a copy. Nothing in your project has changed yet."}.get(rep.status, rep.message)
+    return make_stage(f"Checked {rep.project}", blocks, links, actions=actions, summary=summary, layout="investigation")
+
+
+_VERB = {"read_file": "Read", "list_files": "Looked at files", "grep": "Searched", "edit_file": "Changed", "write_file": "Wrote", "run_command": "Ran",
+         "web_search": "Searched the web", "web_fetch": "Read a web page", "note": "Made a note", "subagent": "Asked a helper", "ask_user": "Asked you"}
+
+
+def agent_stage(run, working: bool) -> dict:
+    """Live view of an agent run: goal -> what it did -> result. Updated on every step (same id)."""
+    items = []
+    for st in run.steps[-14:]:
+        what = st.args.get("path") or st.args.get("command") or st.args.get("pattern") or st.args.get("query") or st.args.get("url") or st.args.get("task") or ""
+        items.append({"label": f"{_VERB.get(st.tool, st.tool)} {str(what)[:46]}".strip() + ("" if st.ok else " (not allowed or failed)"), "state": "done" if st.ok else "active"})
+    if working:
+        items.append({"label": "Working…", "state": "active"})
+    blocks = [{"id": "goal", "type": "node", "title": "Goal", "data": {"value": run.goal[:60]}},
+              {"id": "did", "type": "steps", "title": "What I did", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None,
+               "data": {"items": items or [{"label": "Starting", "state": "active"}]}}]
+    links = [{"from": "goal", "to": "did", "label": "working on"}]
+    actions = [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if working:
+        actions = [{"id": f"agent:stop:{run.id}", "label": "Stop", "kind": "secondary"}]
+    else:
+        blocks.append({"id": "res", "type": "text", "title": "Result", "tone": "good" if run.status == "done" else "warn", "data": {"body": run.final or "Finished."}})
+        links.append({"from": "did", "to": "res", "label": "result"})
+        if run.changed:
+            actions = [{"id": f"agent:undo:{run.id}", "label": f"Undo my changes ({len(run.changed)} file{'s' if len(run.changed) > 1 else ''})", "kind": "secondary"}, {"id": "dismiss", "label": "Keep them", "kind": "ghost"}]
+    stg = make_stage(("Agent: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
+    stg["id"] = f"agent-{run.id}"
+    return stg
