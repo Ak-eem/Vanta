@@ -118,7 +118,7 @@ PROMPT = ("You fix failing tests by changing the PROGRAM code, never the tests. 
           "Keep each edit small. If the failure is not caused by code you can see (missing package, network, setup), reply [].")
 
 
-def run_doctor(project_name: str, folder: Path, llm: Callable[[list[dict]], str], max_rounds: int = 4,
+def run_doctor(project_name: str, folder: Path, llm: Callable[[list[dict]], str], max_rounds: int = 10,
                on_step: Callable[[str], None] = lambda s: None, timeout: float = 120) -> Report:
     rep = Report(id=uuid.uuid4().hex[:10], project=project_name)
     folder = Path(folder)
@@ -136,8 +136,9 @@ def run_doctor(project_name: str, folder: Path, llm: Callable[[list[dict]], str]
     try:
         root = work / "copy"
         _copy(folder, root)
+        last_fail = ""
         for rnd in range(1, max_rounds + 2):
-            on_step("Running the tests" if rnd == 1 else f"Running the tests again (attempt {rnd - 1} of {max_rounds})")
+            on_step("Running the tests" if rnd == 1 else f"Running the tests again (attempt {rnd - 1})")
             res = sandbox.run(rep.command, str(root), timeout=timeout, allow_network=False)
             out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()[-6000:]
             passed = res.returncode == 0 and not res.timed_out
@@ -146,11 +147,16 @@ def run_doctor(project_name: str, folder: Path, llm: Callable[[list[dict]], str]
                 rep.status = "passed" if rnd == 1 else "fixed"
                 break
             if rnd > max_rounds:
-                rep.status, rep.message = "failed", "I couldn't get the tests passing in the attempts I allow myself."
+                rep.status, rep.message = "failed", "I made several fixes and the tests still don't all pass, so I stopped. What I changed so far is not applied."
                 break
             if res.timed_out:
                 rep.status, rep.message = "failed", "The tests took too long to run."
                 break
+            sig = re.sub(r"\d+(\.\d+)?s\b|0x[0-9a-f]+|\bin \d", "", out[-800:])          # same failure as last time = my fixes aren't helping
+            if sig == last_fail:
+                rep.status, rep.message = "failed", "My last fix changed nothing about the failure, so I stopped instead of trying random things."
+                break
+            last_fail = sig
             on_step("Reading the failure and working out a fix")
             ctx = ""
             for rel in _files_in_output(out, root):

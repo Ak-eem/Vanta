@@ -50,3 +50,19 @@ def test_already_passing_and_no_tests(tmp_path):
     empty = tmp_path / "empty"; empty.mkdir(); (empty / "a.txt").write_text("x")
     assert run_doctor("e", empty, GOOD).status == "no_tests"
     assert detect_command(empty) is None and is_test_file("tests/x.py") and not is_test_file("calc.py")
+
+
+def test_keeps_going_while_progress_and_stops_when_stuck(tmp_path):
+    p = tmp_path / "proj"; (p / "tests").mkdir(parents=True)
+    (p / "m.py").write_text("A = 0\nB = 0\nC = 0\n")
+    (p / "tests" / "test_m.py").write_text("import m\n\ndef test_a():\n    assert m.A == 1\ndef test_b():\n    assert m.B == 1\ndef test_c():\n    assert m.C == 1\n")
+    seq = iter(["A = 0", "B = 0", "C = 0"])
+    fixes = lambda msgs: json.dumps([{"file": "m.py", "find": (n := next(seq)), "replace": n[0] + " = 1"}])
+    r = run_doctor("m", p, fixes)                       # three separate bugs need three rounds: more than the old limit of 4 would allow with retries
+    assert r.status == "fixed" and len(r.rounds) == 4
+    q = tmp_path / "q"; (q / "tests").mkdir(parents=True)
+    (q / "m.py").write_text("A = 0\n"); (q / "tests" / "test_m.py").write_text("import m\n\ndef test_a():\n    assert m.A == 1\n")
+    calls = []
+    noop = lambda msgs: calls.append(1) or json.dumps([{"file": "m.py", "find": "A = 0", "replace": "A = 0  # tried"}])
+    r2 = run_doctor("q", q, noop)
+    assert r2.status == "failed" and len(calls) <= 2      # same failure twice: stop, don't burn the model's free quota

@@ -48,6 +48,6 @@ Afterwards VANTA reports what it did; it only adds advice for the things it cann
 
 ## Project doctor (test and fix)
 Settings > Projects > **Test and fix**, or say "test my Mira project and fix any bugs". VANTA copies the project, runs its tests in the sandbox
-(no network), reads any failure, asks the model for small fixes, applies them to the copy and re-tests (up to 4 rounds). It never edits your tests
+(no network), reads any failure, asks the model for small fixes, applies them to the copy and re-tests (up to 10 rounds, and it stops early if a fix changes nothing). It never edits your tests
 and never leaves the project folder. If it fixes something you see the exact changes and press **Apply to my project**; originals are saved to
 `~/.vanta/doctor_backups`. Supports Python (pytest), Node (`npm test` with an existing `node_modules`) and Go. It tells you plainly when it can't fix something.
