@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from .actions import Guardian, Refused
 
 SETTINGS = Path.home() / ".vanta" / "guardian.json"
-DEFAULTS = {"mode": "ask", "veto_seconds": 30, "max_per_hour": 3, "trusted": []}
+DEFAULTS = {"mode": "ask", "veto_seconds": 30, "max_per_hour": 3, "trusted": [], "emergency": True}
 
 
 class Settings:
@@ -29,6 +29,10 @@ class Settings:
 
     def set_mode(self, mode: str) -> None:
         self.data["mode"] = "auto" if mode == "auto" else "ask"
+        self.save()
+
+    def set_emergency(self, on: bool) -> None:
+        self.data["emergency"] = bool(on)
         self.save()
 
     def trust(self, key: str) -> None:

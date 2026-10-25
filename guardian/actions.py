@@ -20,7 +20,7 @@ QUARANTINE = Path.home() / ".vanta" / "quarantine"
 PROTECTED_DIRS = ("c:\\windows", "c:\\program files", "c:\\program files (x86)", "/usr", "/bin", "/sbin", "/etc", "/lib", "/boot", "/system", "/library", "/applications")
 PROTECTED_NAMES = {"system", "system idle process", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
                    "svchost.exe", "explorer.exe", "dwm.exe", "init", "systemd", "launchd", "kernel_task"}
-RISK = {"quarantine": "medium", "end_process": "medium", "restore": "low"}
+RISK = {"quarantine": "medium", "end_process": "medium", "restore": "low", "purge": "medium"}
 
 
 class Refused(Exception):
@@ -35,6 +35,7 @@ class Guardian:
         self.pending: dict[str, dict] = {}
         self._info = pid_info or self._psutil_info
         self._terminate = terminate or self._psutil_terminate
+        self.emergency_log: list[dict] = []
         self.qdir.mkdir(parents=True, exist_ok=True)
 
     # ── proposals ─────────────────────────────────────────────────────────
@@ -103,6 +104,9 @@ class Guardian:
                 raise Refused("That process id now belongs to a different program, so I won't stop it.")
             if t.get("created") and abs(float(info.get("created") or 0) - float(t["created"])) > 2:
                 raise Refused("That process id was reused by a different program, so I won't stop it.")
+        elif kind == "purge":
+            if not (self.qdir / t.get("id", "x") / "meta.json").exists():
+                raise Refused("I can't find that quarantined file.")
         elif kind == "restore":
             if not (self.qdir / t.get("id", "x") / "meta.json").exists():
                 raise Refused("I can't find that quarantined file.")
@@ -137,8 +141,19 @@ class Guardian:
         shutil.rmtree(d, ignore_errors=True)
         return {"restored": str(dest)}
 
+    def _do_purge(self, t: dict) -> dict:
+        """Permanent delete, only ever of something already in quarantine, only when you pressed the button."""
+        d = self.qdir / t["id"]
+        meta = json.loads((d / "meta.json").read_text())
+        try:
+            os.chmod(d / "file.bin", 0o600)
+        except OSError:
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+        return {"deleted": meta["original"], "sha256": meta["sha256"]}
+
     def _do_end_process(self, t: dict) -> dict:
-        self._terminate(int(t["pid"]))
+        self._terminate(int(t["pid"]), True) if t.get("tree") else self._terminate(int(t["pid"]))
         return {"ended": t.get("name"), "pid": t["pid"]}
 
     def quarantined(self) -> list[dict]:
@@ -160,8 +175,15 @@ class Guardian:
             return None
 
     @staticmethod
-    def _psutil_terminate(pid: int) -> None:
+    def _psutil_terminate(pid: int, tree: bool = False) -> None:
         p = psutil.Process(pid)
+        if tree:                                          # emergency: no polite request, take it and everything it started
+            kids = p.children(recursive=True)
+            for k in kids:
+                try: k.kill()
+                except psutil.Error: pass
+            p.kill()
+            return
         p.terminate()                                     # polite first; the program can clean up
         try:
             p.wait(5)

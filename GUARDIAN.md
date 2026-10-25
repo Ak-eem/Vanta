@@ -26,3 +26,17 @@ Switching it off before the timer ends holds the action.
 - **Verdicts**: safe / unknown / suspicious / dangerous. Verified (signed or widely known) apps are left alone and not even flagged. "Unknown" is never treated as safe.
   Autopilot only acts on dangerous (or strongly suspicious) verdicts; anything unknown always waits for you.
 - Results: Settings > Safety > Recent scans. You can also paste a path there to scan a file on demand.
+
+## Malware types and emergency stop
+Scans now name the **type**: ransomware, cryptominer, keylogger, infostealer, dropper, backdoor, injector, defense-evasion (antivirus killer),
+spyware, obfuscated script. Each comes with a plain explanation of what it does and what *you* should do (e.g. change passwords after a keylogger).
+
+**Emergency stop** (on by default; Settings > Safety). No waiting and no asking, for the cases where a delay is what does the damage:
+- A file scan finds ransomware, a keylogger, a password stealer, a backdoor or an injector with a *dangerous* verdict: it is quarantined immediately.
+- **Ransomware behaviour watch**: VANTA hides decoy files (`!_vanta_do_not_touch.*`) in Documents, Desktop, Pictures and Downloads and watches those folders.
+  Two different signals trigger it: a decoy touched, many files changed across many folders in seconds, many files renamed to the same new ending, or ransom notes
+  appearing in several folders. It then ends the program writing the most data, plus everything that program started, and quarantines it.
+  If it can't tell which program, or the program is a verified signed app, or you marked it trusted, it only alerts you.
+- Tested with a ransomware simulator: stopped in under a second, 25 of 320 files affected.
+Not included: running files inside a virtual machine (needs Windows Pro sandbox/Hyper-V and admin rights) and permanent deletion without you:
+files are always quarantined first; **Delete for good** in Settings > Safety removes one permanently when you press it.

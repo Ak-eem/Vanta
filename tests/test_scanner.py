@@ -98,3 +98,21 @@ def test_sweeper_scans_each_running_program_once_and_skips_system(tmp_path):
     sw = Sweeper(mk(tmp_path), got.append, lister=lambda: [str(a), str(a), "/usr/bin/ls", None], pause=0)
     assert sw.sweep_once(sleep=lambda s: None) == 1 and sw.sweep_once(sleep=lambda s: None) == 0
     assert got[0]["name"] == "app.exe"
+
+
+def test_names_the_malware_family(tmp_path):
+    cases = {
+        "r.ps1": ("vssadmin delete shadows /all\nyour files are encrypted, bitcoin address bc1q", "ransomware"),
+        "m.ps1": ("stratum+tcp://pool xmrig --donate\nschtasks /create /tn m\npowershell -enc AAAA\nSet-MpPreference -DisableRealtimeMonitoring 1", "cryptominer"),
+        "k.ps1": ("GetAsyncKeyState SetWindowsHookEx\nSet-MpPreference -DisableRealtimeMonitoring 1\npowershell -enc AAAA", "keylogger"),
+        "s.ps1": ("Login Data cookies.sqlite wallet.dat\npowershell -enc AAAA\nschtasks /create /tn x\nInvoke-WebRequest", "infostealer"),
+    }
+    s = mk(tmp_path)
+    for name, (txt, fam) in cases.items():
+        f = tmp_path / name; f.write_text(txt)
+        r = s.scan(f)
+        assert r["family"]["family"] == fam, (name, r["family"])
+    t = tmp_path / "t.txt"; t.write_bytes(static.EICAR)
+    assert s.scan(t)["family"]["family"] == "test-file"
+    ok = tmp_path / "ok.txt"; ok.write_text("hello")
+    assert s.scan(ok)["family"] is None

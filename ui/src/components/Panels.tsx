@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { GuardianState, Project, ScanResult } from '../types'
 
-const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
+const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const name = (p: string) => p.split(/[\\/]/).pop() ?? p
 
@@ -28,7 +28,8 @@ export function ProjectsPanel({ projects, onSave, onRemove }: { projects: Projec
   </>)
 }
 
-export function SafetyPanel({ g, onRestore, onMode, scans, onScan }: { g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void; scans: ScanResult[]; onScan: (p: string) => void }) {
+export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, onPurge }: {
+  onEmergency: (on: boolean) => void; onPurge: (id: string) => void; g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void; scans: ScanResult[]; onScan: (p: string) => void }) {
   const [path, setPath] = useState('')
   if (!g) return <p>Loading…</p>
   return (<>
@@ -39,7 +40,11 @@ export function SafetyPanel({ g, onRestore, onMode, scans, onScan }: { g: Guardi
       <button className="switch" role="switch" aria-label="Let VANTA act on its own" aria-checked={g.mode === 'auto'}
         onClick={() => { if (g.mode === 'auto' || window.confirm('Let VANTA end programs and quarantine files by itself?\n\nIt waits 30 seconds first so you can stop it, never deletes anything, and you can undo file moves. Ending a program loses anything unsaved in it.')) onMode(g.mode === 'auto' ? 'ask' : 'auto') }} />
     </div>
-    <p>Files go to a locked folder (never deleted). Everything is written here.</p>
+    <div className="toggle">
+      <div>Emergency stop for ransomware and spyware<small>{g.emergency === false ? 'Off. I will only warn you.' : 'On. If I catch ransomware, a keylogger or a password stealer, or see files being locked fast, I stop it immediately, without asking. I leave verified apps and programs you trust alone.'}</small></div>
+      <button className="switch" role="switch" aria-label="Emergency stop" aria-checked={g.emergency !== false} onClick={() => onEmergency(g.emergency === false)} />
+    </div>
+    <p>Files go to a locked folder. Everything is written here.</p>
     <div className={`chain ${g.chain_ok ? 'ok' : 'bad'}`} role="status">{g.chain_ok ? 'Log intact: nothing has been edited or removed.' : 'Warning: this log has been changed after the fact.'}</div>
     <h3>Recent scans</h3>
     <p>I check every download and every running program, reading what's inside without running it. Only a file's fingerprint is ever sent out, and only if you add a VirusTotal key.</p>
@@ -49,7 +54,8 @@ export function SafetyPanel({ g, onRestore, onMode, scans, onScan }: { g: Guardi
     </div>
     {scans.slice(0, 12).map((x) => (
       <div className="proj" key={x.sha256}>
-        <div className="proj-h"><b style={{ overflowWrap: 'anywhere' }}>{x.name}</b><span className={`chip scan-${x.label}`}>{x.label}</span></div>
+        <div className="proj-h"><b style={{ overflowWrap: 'anywhere' }}>{x.name}</b><span className={`chip scan-${x.label}`}>{x.family ? x.family.family : x.label}</span></div>
+        {x.family ? <div className="proj-s">{x.family.does}</div> : null}
         {x.about ? <div className="proj-s">{x.about}</div> : null}
         <div className="proj-m">{[...x.reasons, ...x.vouched].slice(0, 3).join(' · ') || 'Nothing unusual found.'}{x.publisher ? ` · ${x.publisher}` : ''}</div>
       </div>))}
@@ -57,7 +63,8 @@ export function SafetyPanel({ g, onRestore, onMode, scans, onScan }: { g: Guardi
     <h3 style={{ marginTop: 16 }}>Quarantined files</h3>
     {g.quarantined.map((q) => (
       <div className="proj" key={q.id}><div className="proj-h"><b>{name(q.original)}</b></div><div className="proj-m">{q.original}<br />Locked {when(q.ts)}</div>
-        <button className="btn sm" onClick={() => onRestore(q.id)}>Put it back</button></div>))}
+        <div style={{ display: 'flex', gap: 8 }}><button className="btn sm" onClick={() => onRestore(q.id)}>Put it back</button>
+          <button className="btn sm ghost" onClick={() => { if (window.confirm('Delete this file permanently? This cannot be undone.')) onPurge(q.id) }}>Delete for good</button></div></div>))}
     {!g.quarantined.length ? <p>Nothing quarantined.</p> : null}
     <h3 style={{ marginTop: 16 }}>Recent activity</h3>
     {g.audit.map((a) => (

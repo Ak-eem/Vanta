@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .families import classify
+
 
 def decide(report: dict, rep: Optional[dict] = None, trusted: bool = False) -> dict:
     """rep: {'malicious': int, 'total': int} from a hash lookup, or None if nobody has seen the file."""
@@ -34,5 +36,6 @@ def decide(report: dict, rep: Optional[dict] = None, trusted: bool = False) -> d
         label = "safe"
     else:
         label = "unknown" if (score >= 20 or report["kind"] in ("windows program", "linux program", "script")) else "safe"
-    return {"label": label, "score": score, "reasons": reasons[:6], "vouched": vouched[:4],
+    fam = classify(findings) if label in ("suspicious", "dangerous") else None
+    return {"label": label, "score": score, "reasons": reasons[:6], "vouched": vouched[:4], "family": fam,
             "act": label in ("dangerous",) or (label == "suspicious" and score >= 70)}   # only strong cases may trigger autopilot

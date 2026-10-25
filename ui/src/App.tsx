@@ -99,7 +99,7 @@ export default function App() {
 
       {state.conn === 'offline' && <div className="offline-bar" role="status">Reconnecting… I'll be right back.</div>}
       <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)}
-        projects={state.projects} guardian={state.guardian} onSaveProject={api.saveProject} onRemoveProject={api.removeProject} onRestore={api.restore} onGuardMode={api.setGuardMode} scans={state.scans} onScan={api.scanFile} onOpenPanels={api.loadPanels}
+        projects={state.projects} guardian={state.guardian} onSaveProject={api.saveProject} onRemoveProject={api.removeProject} onRestore={api.restore} onGuardMode={api.setGuardMode} scans={state.scans} onScan={api.scanFile} onEmergency={api.setEmergency} onPurge={api.purge} onOpenPanels={api.loadPanels}
         sync={state.sync} onUnlock={api.syncUnlock} onSyncNow={api.syncNow} layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
       <NudgeToast nudge={state.nudge} onAck={api.ackNudge} />
       <ApprovalModal approval={state.approval} onAnswer={api.answerApproval} />

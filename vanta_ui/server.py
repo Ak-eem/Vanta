@@ -1396,7 +1396,7 @@ def on_stage_action(data):
 def _emit_guardian_state():
     if AWARE_OK:
         socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None,
-                                         "mode": guard_settings.data["mode"], "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
+                                         "mode": guard_settings.data["mode"], "emergency": guard_settings.data["emergency"], "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
 
 
 @socketio.on("guardian_get")
@@ -1427,6 +1427,31 @@ def on_scan_file(data):
         except Exception as exc:
             socketio.emit("response", {"text": f"I couldn't scan that: {exc}"}, room=sid)
     threading.Thread(target=work, daemon=True).start()
+
+
+@socketio.on("guardian_emergency")
+def on_guardian_emergency(data):
+    if AWARE_OK:
+        on = bool((data or {}).get("on"))
+        guard_settings.set_emergency(on)
+        if ransom_watch:
+            ransom_watch.enabled = on
+        guardian.audit.add("emergency_changed", "", on=on, by="you")
+        _emit_guardian_state()
+
+
+@socketio.on("guardian_purge")
+def on_guardian_purge(data):
+    """Permanently delete one quarantined file. Only ever from quarantine, only on a button press."""
+    if not AWARE_OK:
+        return
+    try:
+        p = guardian.propose("purge", {"id": str((data or {}).get("id", ""))}, "You asked to delete it for good")
+        guardian.approve(p["id"])
+        emit("response", {"text": "Deleted for good."})
+    except Refused as exc:
+        emit("response", {"text": str(exc)})
+    _emit_guardian_state()
 
 
 @socketio.on("guardian_mode")
@@ -1596,13 +1621,14 @@ try:
     from guardian.audit import AuditLog
     from guardian.auto import Autopilot, Settings as GuardSettings
     from scanner.engine import Scanner, DownloadWatcher, Sweeper
+    from guardian.ransomware import RansomwareWatch, WriterTracker, plant_canaries
     from projects.registry import Projects
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
 
-privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = None
+privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1646,6 +1672,63 @@ if AWARE_OK:
 
     scanner_obj = Scanner(explain=_explain, is_trusted=lambda r: guard_settings.is_trusted(r.get("name", ""), r.get("path", ""), (r.get("signature") or {}).get("publisher", "")))
 
+    _exe_safe: dict = {}
+
+    def _contain_now(kind_label: str, targets: list, reason: str, family: dict | None = None, tree: bool = True) -> list[str]:
+        """Emergency containment: no waiting, no asking. Same safety refusals as always. Everything is logged as 'VANTA (emergency)'.
+        targets: [{'pid','name','created','exe'}]. Returns plain sentences about what was done."""
+        done = []
+        for t in targets:
+            if guard_settings.is_trusted(str(t.get("name", "")), str(t.get("exe", ""))):
+                done.append(f"I left {t.get('name')} alone because you told me to trust it.")
+                continue
+            for kind, target in (("end_process", {"pid": t["pid"], "name": t.get("name"), "created": t.get("created"), "tree": tree}),
+                                 ("quarantine", {"path": t.get("exe", "")})):
+                if kind == "end_process" and not t.get("pid"):
+                    continue
+                try:
+                    pr = guardian.propose(kind, target, reason)
+                    guardian.approve(pr["id"], who="VANTA (emergency)")
+                    done.append(f"Stopped {t.get('name')} and everything it started." if kind == "end_process" else f"Quarantined {Path(str(t.get('exe'))).name}.")
+                except Refused as exc:
+                    done.append(f"Couldn't {('stop ' + str(t.get('name'))) if kind == 'end_process' else 'quarantine the file'}: {exc}")
+        return done
+
+    def _announce(title: str, body: str, done: list[str], fam: dict | None) -> None:
+        extra = ("\n\nWhat to do now: " + fam["you"]) if fam else ""
+        socketio.emit("stage", guardian_stage("high", title, body + ("\n\nWhat I did: " + " ".join(done) if done else "") + extra, [], 0))
+        socketio.emit("response", {"text": f"{title}. {' '.join(done)}".strip()})
+        nudges.nudge(f"emergency:{title[:30]}", "high", title, " ".join(done)[:200] or body[:200])
+        _emit_guardian_state()
+
+    def _on_ransom(writers: list, sig: dict) -> None:
+        safe = []
+        for w in writers:
+            # Speed matters here, so use what the background sweep already learned; never hash a program while files are burning.
+            if _exe_safe.get(str(w.get("exe") or "")) == "safe":
+                continue                                   # a verified, signed app: alert instead of killing
+            safe.append(w)
+        why = ", ".join({"canary": "a decoy file was changed", "burst": f"{sig['files']} files changed in seconds", "rename": f"files renamed to {sig.get('ext') or 'a new ending'}", "notes": "ransom-style notes appeared in several folders"}[k] for k in sig["why"])
+        fam = {"you": "Disconnect from Wi-Fi, don't pay anything, and check your backups. Ask me which files changed."}
+        if not safe:
+            _announce("Files are being changed very fast", f"Signs of ransomware: {why}. The program doing it looks like a verified app, so I did not stop it. Check that this is something you started.", [], fam)
+            return
+        done = _contain_now("ransomware", safe, f"ransomware behaviour: {why}")
+        _announce("I stopped something that looked like ransomware", f"Signs: {why}. Culprit: {', '.join(w['name'] for w in safe)}.", done, fam)
+
+    def _on_ransom_unknown(sig: dict) -> None:
+        _announce("Files are being changed very fast", f"Signs of ransomware ({sig['files']} files in {sig['dirs']} folders), but I couldn't tell which program is doing it, so I didn't stop anything. If you didn't start this, disconnect from Wi-Fi and shut the computer down.", [], {"you": "Disconnect from Wi-Fi and don't pay anything."})
+
+    try:
+        _prot = [Path.home() / d for d in ("Documents", "Desktop", "Pictures", "Downloads")]
+        _prot = [d for d in _prot if d.is_dir()]
+        writer_tracker = WriterTracker()
+        ransom_watch = RansomwareWatch(plant_canaries(_prot) if guard_settings.data["emergency"] else [], writer_tracker, _on_ransom, _on_ransom_unknown)
+        ransom_watch.enabled = bool(guard_settings.data["emergency"])
+        ransom_watch._folders = _prot
+    except Exception as _re:
+        print(f"[ransomware] watch unavailable: {_re}")
+
     def _on_scan(res: dict) -> None:
         """Called for every finished scan. Safe files stay quiet; anything else is shown, and risky files come with actions."""
         socketio.emit("scan_result", res)
@@ -1654,8 +1737,16 @@ if AWARE_OK:
         if res["label"] == "unknown" and res.get("kind") not in ("windows program", "linux program", "script"):
             return
         title = {"dangerous": f"{res['name']} looks dangerous", "suspicious": f"{res['name']} looks suspicious", "unknown": f"I checked {res['name']}"}[res["label"]]
+        fam = res.get("family")
         body = (res.get("about") or "") + ("\n\n" if res.get("about") else "") + (
             "What I found: " + "; ".join(res["reasons"]) if res["reasons"] else "No red flags found, but I couldn't confirm who made it.")
+        if fam:
+            body = f"Type: {fam['family']}. {fam['does']}\n\n" + body + f"\n\nWhat to do: {fam['you']}"
+            title = f"{res['name']}: {fam['family']}"
+        if fam and fam["fast"] and res["label"] == "dangerous" and guard_settings.data["emergency"]:
+            done = _contain_now(fam["family"], [{"name": res["name"], "exe": res["path"]}], f"{fam['family']} found by scan")
+            _announce(title, body.split("\n\nWhat to do:")[0], done, fam)
+            return
         props = []
         if res["label"] in ("dangerous", "suspicious"):
             try:
@@ -1672,7 +1763,11 @@ if AWARE_OK:
 
     _dl = Path(os.getenv("VANTA_SCAN_FOLDERS", str(Path.home() / "Downloads"))).expanduser()
     download_watcher = DownloadWatcher(scanner_obj, [Path(x) for x in os.getenv("VANTA_SCAN_FOLDERS", str(_dl)).split(os.pathsep)], _on_scan)
-    sweeper = Sweeper(scanner_obj, lambda r: _on_scan(r) if r["label"] in ("dangerous", "suspicious") else None)
+    def _on_sweep(r: dict) -> None:
+        _exe_safe[r["path"]] = r["label"]
+        if r["label"] in ("dangerous", "suspicious"):
+            _on_scan(r)
+    sweeper = Sweeper(scanner_obj, _on_sweep)
     bridge = MemoryBridge(activity_log, people_db, vanta_memory if MEMORY_OK else None)
     nudges = NudgeEngine(lambda ev, data: socketio.emit(ev, data))
     privacy.on_change(lambda snap: socketio.emit("privacy_state", snap))
@@ -1756,6 +1851,27 @@ def start_awareness(port: int) -> None:
     if download_watcher:
         download_watcher.start()
         sweeper.start()
+    if ransom_watch and ransom_watch.canaries:
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+
+            class _RH(FileSystemEventHandler):
+                def on_modified(self, e):
+                    if not e.is_directory: ransom_watch.on_event("modified", e.src_path)
+                def on_created(self, e):
+                    if not e.is_directory: ransom_watch.on_event("created", e.src_path)
+                def on_deleted(self, e):
+                    if not e.is_directory: ransom_watch.on_event("deleted", e.src_path)
+                def on_moved(self, e):
+                    if not e.is_directory: ransom_watch.on_event("moved", e.src_path, e.dest_path)
+            _ro = Observer(); _ro.daemon = True
+            for _d in getattr(ransom_watch, "_folders", []):
+                _ro.schedule(_RH(), str(_d), recursive=True)
+            _ro.start()
+            threading.Thread(target=lambda: [(writer_tracker.sample(), time.sleep(2)) for _ in iter(int, 1)], name="vanta-writers", daemon=True).start()
+        except Exception as exc:
+            print(f"[ransomware] folder watching unavailable: {exc}")
     window_watcher.start()
     screen_watcher.start()          # stays idle unless the 'screen' source is switched on
     global tray
