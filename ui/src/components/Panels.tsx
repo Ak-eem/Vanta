@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { GuardianState, Project, ScanResult } from '../types'
 
-const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', project_checked: 'Checked a project', project_fix_applied: 'Applied a fix', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
+const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', project_checked: 'Checked a project', agent_run: 'Agent task', agent_undo: 'Undid agent changes', project_fix_applied: 'Applied a fix', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const name = (p: string) => p.split(/[\\/]/).pop() ?? p
 
@@ -28,7 +28,8 @@ export function ProjectsPanel({ projects, onSave, onRemove, onCheck }: { project
   </>)
 }
 
-export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, onPurge }: {
+export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, onPurge, onAgentMode }: {
+  onAgentMode: (m: string) => void;
   onEmergency: (on: boolean) => void; onPurge: (id: string) => void; g: GuardianState | null; onRestore: (id: string) => void; onMode: (m: 'ask' | 'auto') => void; scans: ScanResult[]; onScan: (p: string) => void }) {
   const [path, setPath] = useState('')
   if (!g) return <p>Loading…</p>
@@ -46,6 +47,11 @@ export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, 
     </div>
     <p>Files go to a locked folder. Everything is written here.</p>
     <div className={`chain ${g.chain_ok ? 'ok' : 'bad'}`} role="status">{g.chain_ok ? 'Log intact: nothing has been edited or removed.' : 'Warning: this log has been changed after the fact.'}</div>
+    <h3>Agent permissions</h3>
+    <p>For "/agent do something" tasks. It looks, plans, changes files and runs checks, and you can undo everything afterwards.</p>
+    <div className="seg" role="radiogroup" aria-label="Agent permissions" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      {([['plan', 'Look only'], ['ask', 'Ask me'], ['accept_edits', 'Edit freely'], ['auto', 'Auto']] as const).map(([v, l]) => <button key={v} role="radio" aria-checked={(g.agent_mode ?? 'ask') === v} onClick={() => onAgentMode(v)}>{l}</button>)}
+    </div>
     <h3>Recent scans</h3>
     <p>I check every download and every running program, reading what's inside without running it. Only a file's fingerprint is ever sent out, and only if you add a VirusTotal key.</p>
     <div className="composer" style={{ marginBottom: 10 }}>

@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from .actions import Guardian, Refused
 
 SETTINGS = Path.home() / ".vanta" / "guardian.json"
-DEFAULTS = {"mode": "ask", "veto_seconds": 30, "max_per_hour": 3, "trusted": [], "emergency": True}
+DEFAULTS = {"mode": "ask", "veto_seconds": 30, "max_per_hour": 3, "trusted": [], "emergency": True, "agent_mode": "ask"}
 
 
 class Settings:
@@ -29,6 +29,10 @@ class Settings:
 
     def set_mode(self, mode: str) -> None:
         self.data["mode"] = "auto" if mode == "auto" else "ask"
+        self.save()
+
+    def set_agent_mode(self, mode: str) -> None:
+        self.data["agent_mode"] = mode if mode in ("plan", "ask", "accept_edits", "auto") else "ask"
         self.save()
 
     def set_emergency(self, on: bool) -> None:

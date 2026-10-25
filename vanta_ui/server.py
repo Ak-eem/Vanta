@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1146,6 +1146,15 @@ def handle_chat(data):
         # Anything else — drop the pending offer, fall through to normal routing
         checklist_pending.pop(sid, None)
 
+    am = re.match(r"^\s*(?:/agent|agent:)\s*(.+)", msg, re.I | re.S) if AWARE_OK else None
+    if am:
+        goal = am.group(1).strip()
+        hit = projects_db.mentioned_in(goal)
+        root = Path(hit[0]["folder"]) if hit and hit[0].get("folder") and Path(hit[0]["folder"]).is_dir() else Path(WORKSPACE)
+        socketio.emit("response", {"text": f"On it. I'll work in {root.name} ({guard_settings.data.get('agent_mode', 'ask')} mode). Say stop any time, and I can undo my changes afterwards."}, room=sid)
+        threading.Thread(target=_run_agent, args=(sid, goal, root), daemon=True).start()
+        return
+
     if AWARE_OK and re.search(r"\b(test|check|debug|fix|find (the )?(bugs?|errors?))\b", msg, re.I) and re.search(r"\b(project|app|code|repo)\b", msg, re.I):
         hit = projects_db.mentioned_in(msg)
         if hit and hit[0].get("folder"):
@@ -1371,6 +1380,16 @@ def on_stage_action(data):
     """Buttons on stage cards. `guard:` buttons are approvals for Guardian requests; pressing one is the approval."""
     sid = request.sid
     action = str((data or {}).get("action", ""))
+    if AWARE_OK and action.startswith("agent:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        ag = agents.get(rid)
+        if verb == "stop" and ag:
+            ag.stop = True
+        elif verb == "undo" and ag:
+            back = ag.rewind()
+            guardian.audit.add("agent_undo", rid, files=back)
+            socketio.emit("response", {"text": f"Undone. I put back {len(back)} file(s) exactly as they were."}, room=sid)
+        return
     if AWARE_OK and action.startswith("doctor:"):
         _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
         item = doctor_reports.pop(rid, None)
@@ -1418,7 +1437,7 @@ def on_stage_action(data):
 def _emit_guardian_state():
     if AWARE_OK:
         socketio.emit("guardian_state", {"quarantined": guardian.quarantined(), "audit": guardian.audit.recent(30), "chain_ok": guardian.audit.verify() is None,
-                                         "mode": guard_settings.data["mode"], "emergency": guard_settings.data["emergency"], "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
+                                         "mode": guard_settings.data["mode"], "emergency": guard_settings.data["emergency"], "agent_mode": guard_settings.data.get("agent_mode", "ask"), "veto": guard_settings.data["veto_seconds"], "max_per_hour": guard_settings.data["max_per_hour"]})
 
 
 @socketio.on("guardian_get")
@@ -1449,6 +1468,13 @@ def on_scan_file(data):
         except Exception as exc:
             socketio.emit("response", {"text": f"I couldn't scan that: {exc}"}, room=sid)
     threading.Thread(target=work, daemon=True).start()
+
+
+@socketio.on("agent_mode")
+def on_agent_mode(data):
+    if AWARE_OK:
+        guard_settings.set_agent_mode(str((data or {}).get("mode", "ask")))
+        _emit_guardian_state()
 
 
 @socketio.on("guardian_emergency")
@@ -1519,6 +1545,32 @@ def on_project_save(data):
 
 
 doctor_reports: dict = {}
+agents: dict = {}
+
+
+def _run_agent(sid: str, goal: str, root: Path) -> None:
+    """Runs the agent loop for a goal. Edits and commands follow the permission mode; every approval is a pop-up you answer."""
+    mode = guard_settings.data.get("agent_mode", "ask")
+    ag = None
+    def push(working: bool):
+        socketio.emit("stage", agent_stage(ag.run, working), room=sid)
+    ag = Agent(lambda msgs: call_once(msgs, "CODE", max_tok=1200, temp=0.2), root, mode,
+               approve=lambda action, detail: request_approval(sid, action, detail),
+               ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
+               web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
+               on_step=lambda st: push(True))
+    agents[ag.run.id] = ag
+    socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
+    try:
+        push(True)
+        run = ag.execute(goal)
+        guardian.audit.add("agent_run", run.id, goal=goal[:100], status=run.status, changed=run.changed, mode=mode)
+        push(False)
+        socketio.emit("response", {"text": run.final or "Finished."}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The agent hit a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
 
 
 def _run_project_check(sid: str, proj: dict) -> None:
@@ -1679,6 +1731,8 @@ try:
     from guardian.ransomware import RansomwareWatch, WriterTracker, plant_canaries
     from projects.registry import Projects
     from doctor.fixer import run_doctor, apply_report
+    from agent.loop import Agent
+    from agent.checkpoints import Checkpoints
     AWARE_OK = True
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")

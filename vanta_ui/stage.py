@@ -142,3 +142,32 @@ def doctor_stage(rep) -> dict:
         blocks.append({"id": "msg", "type": "text", "title": "Result", "tone": "good" if ok else "warn", "data": {"body": rep.message}})
     summary = {"passed": "All tests pass. Nothing to fix.", "fixed": "I found and fixed the problem in a copy. Nothing in your project has changed yet."}.get(rep.status, rep.message)
     return make_stage(f"Checked {rep.project}", blocks, links, actions=actions, summary=summary, layout="investigation")
+
+
+_VERB = {"read_file": "Read", "list_files": "Looked at files", "grep": "Searched", "edit_file": "Changed", "write_file": "Wrote", "run_command": "Ran",
+         "web_search": "Searched the web", "web_fetch": "Read a web page", "note": "Made a note", "subagent": "Asked a helper", "ask_user": "Asked you"}
+
+
+def agent_stage(run, working: bool) -> dict:
+    """Live view of an agent run: goal -> what it did -> result. Updated on every step (same id)."""
+    items = []
+    for st in run.steps[-14:]:
+        what = st.args.get("path") or st.args.get("command") or st.args.get("pattern") or st.args.get("query") or st.args.get("url") or st.args.get("task") or ""
+        items.append({"label": f"{_VERB.get(st.tool, st.tool)} {str(what)[:46]}".strip() + ("" if st.ok else " (not allowed or failed)"), "state": "done" if st.ok else "active"})
+    if working:
+        items.append({"label": "Working…", "state": "active"})
+    blocks = [{"id": "goal", "type": "node", "title": "Goal", "data": {"value": run.goal[:60]}},
+              {"id": "did", "type": "steps", "title": "What I did", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None,
+               "data": {"items": items or [{"label": "Starting", "state": "active"}]}}]
+    links = [{"from": "goal", "to": "did", "label": "working on"}]
+    actions = [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if working:
+        actions = [{"id": f"agent:stop:{run.id}", "label": "Stop", "kind": "secondary"}]
+    else:
+        blocks.append({"id": "res", "type": "text", "title": "Result", "tone": "good" if run.status == "done" else "warn", "data": {"body": run.final or "Finished."}})
+        links.append({"from": "did", "to": "res", "label": "result"})
+        if run.changed:
+            actions = [{"id": f"agent:undo:{run.id}", "label": f"Undo my changes ({len(run.changed)} file{'s' if len(run.changed) > 1 else ''})", "kind": "secondary"}, {"id": "dismiss", "label": "Keep them", "kind": "ghost"}]
+    stg = make_stage(("Agent: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
+    stg["id"] = f"agent-{run.id}"
+    return stg

@@ -203,6 +203,7 @@ export function useVanta() {
     saveProject: (p: Partial<Project>) => sock.current?.emit('project_save', p),
     removeProject: (id: string) => sock.current?.emit('project_remove', { id }),
     setGuardMode: (mode: 'ask' | 'auto') => sock.current?.emit('guardian_mode', { mode }),
+    setAgentMode: (mode: string) => sock.current?.emit('agent_mode', { mode }),
     setEmergency: (on: boolean) => sock.current?.emit('guardian_emergency', { on }),
     purge: (id: string) => sock.current?.emit('guardian_purge', { id }),
     restore: (id: string) => sock.current?.emit('guardian_restore', { id }),

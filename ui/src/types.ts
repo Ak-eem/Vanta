@@ -50,6 +50,6 @@ export interface Telemetry {
 export interface SyncState { configured: boolean; unlocked: boolean; last: number; error: string }
 
 export interface Project { id: string; name: string; folder: string; summary: string; stack: string; status: string; next_step: string; health?: { exists?: boolean; branch?: string; uncommitted?: number; last_commit?: string } }
-export interface GuardianState { quarantined: { id: string; original: string; sha256: string; ts: number }[]; audit: { n: number; ts: number; event: string; detail: Record<string, unknown> }[]; chain_ok: boolean; mode?: 'ask' | 'auto'; emergency?: boolean; veto?: number; max_per_hour?: number }
+export interface GuardianState { quarantined: { id: string; original: string; sha256: string; ts: number }[]; audit: { n: number; ts: number; event: string; detail: Record<string, unknown> }[]; chain_ok: boolean; mode?: 'ask' | 'auto'; emergency?: boolean; agent_mode?: 'plan' | 'ask' | 'accept_edits' | 'auto'; veto?: number; max_per_hour?: number }
 
 export interface ScanResult { sha256: string; name: string; path: string; ts: number; label: 'safe' | 'unknown' | 'suspicious' | 'dangerous'; score: number; reasons: string[]; vouched: string[]; family?: { family: string; does: string; you: string } | null; about?: string; publisher?: string; kind?: string }

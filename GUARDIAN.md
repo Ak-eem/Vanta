@@ -51,3 +51,11 @@ Settings > Projects > **Test and fix**, or say "test my Mira project and fix any
 (no network), reads any failure, asks the model for small fixes, applies them to the copy and re-tests (up to 10 rounds, and it stops early if a fix changes nothing). It never edits your tests
 and never leaves the project folder. If it fixes something you see the exact changes and press **Apply to my project**; originals are saved to
 `~/.vanta/doctor_backups`. Supports Python (pytest), Node (`npm test` with an existing `node_modules`) and Go. It tells you plainly when it can't fix something.
+
+## Agent (work like Claude Code)
+Type `/agent <what you want>` in chat. VANTA looks around, plans, edits files, runs checks, and repeats until it can confirm the result.
+- **Permissions** (Settings → Agent permissions): Look only / Ask me / Edit freely / Auto.
+- **Undo**: every file it changes is saved first; "Undo my changes" puts them back.
+- **Memory**: put standing rules in `VANTA.md` (in `~/.vanta` or the project). The agent also keeps its own notes.
+- Secret files (.env, keys) are blocked. Commands run in the sandbox with no network, and destructive ones are refused.
+- File contents it reads are sent to your chosen AI provider.
