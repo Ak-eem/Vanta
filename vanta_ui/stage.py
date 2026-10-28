@@ -171,3 +171,33 @@ def agent_stage(run, working: bool) -> dict:
     stg = make_stage(("Agent: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
     stg["id"] = f"agent-{run.id}"
     return stg
+
+
+_BUILD_STEPS = [("blueprint", "Plan the build (strong brain)"), ("writing files", "Write the files (fast brain)"),
+                ("senior review", "Senior review (strong brain)"), ("checking", "Checks and fixes")]
+
+
+def build_stage(run, working: bool) -> dict:
+    """Live view of a two-brain build. Updated on every stage change (same id)."""
+    cur = 0
+    for i, (key, _) in enumerate(_BUILD_STEPS):
+        if run.stage.startswith(key) or (key == "checking" and run.stage.startswith("fixing")):
+            cur = i
+    items = [{"label": label + (f" ({run.stage})" if working and i == cur and run.stage.startswith("fixing") else ""),
+              "state": "done" if (not working or i < cur) else "active" if i == cur else "todo"}
+             for i, (_, label) in enumerate(_BUILD_STEPS)]
+    blocks = [{"id": "goal", "type": "node", "title": "Goal", "data": {"value": run.goal[:60]}},
+              {"id": "steps", "type": "steps", "title": "Two brains at work", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None, "data": {"items": items}}]
+    links = [{"from": "goal", "to": "steps", "label": "building"}]
+    if run.files:
+        blocks.append({"id": "files", "type": "text", "title": "Files", "data": {"body": ", ".join(run.files)}})
+        links.append({"from": "steps", "to": "files", "label": "plan"})
+    actions = [{"id": f"build:stop:{run.id}", "label": "Stop", "kind": "secondary"}] if working else [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if not working:
+        blocks.append({"id": "res", "type": "text", "title": "Result", "tone": "good" if run.status == "done" else "warn", "data": {"body": run.final or "Finished."}})
+        links.append({"from": "steps", "to": "res", "label": "result"})
+        if run.changed:
+            actions = [{"id": f"build:undo:{run.id}", "label": f"Undo the build ({len(run.changed)} file{'s' if len(run.changed) > 1 else ''})", "kind": "secondary"}, {"id": "dismiss", "label": "Keep it", "kind": "ghost"}]
+    stg = make_stage(("Build: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
+    stg["id"] = f"build-{run.id}"
+    return stg

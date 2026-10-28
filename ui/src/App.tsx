@@ -5,6 +5,7 @@ import { readPref, useHudMode, writePref, type LayoutPref } from './lib/hudMode'
 import { useFx } from './lib/useFx'
 import { ChatList, Composer } from './components/Chat'
 import { ApprovalModal, NudgeToast, SettingsDrawer } from './components/Overlays'
+import { SetupSwitcher } from './components/Panels'
 import { StageView } from './stage/StageView'
 import { sphereState, useVanta } from './lib/useVanta'
 import type { StageAction } from './types'
@@ -89,6 +90,7 @@ export default function App() {
           footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>
 
+      <SetupSwitcher s={state.setup} onSet={api.setSetup} />
       {!phone && !railOpen ? <button className="dock" onClick={openRail} aria-label="Open chat"><span>Ask VANTA…</span></button> : null}
 
       {phone && (
@@ -99,7 +101,7 @@ export default function App() {
 
       {state.conn === 'offline' && <div className="offline-bar" role="status">Reconnecting… I'll be right back.</div>}
       <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)}
-        projects={state.projects} guardian={state.guardian} onSaveProject={api.saveProject} onRemoveProject={api.removeProject} onRestore={api.restore} onGuardMode={api.setGuardMode} scans={state.scans} onScan={api.scanFile} onEmergency={api.setEmergency} onCheckProject={api.checkProject} onAgentMode={api.setAgentMode} onPurge={api.purge} onOpenPanels={api.loadPanels}
+        projects={state.projects} guardian={state.guardian} onSaveProject={api.saveProject} onRemoveProject={api.removeProject} onRestore={api.restore} onGuardMode={api.setGuardMode} scans={state.scans} onScan={api.scanFile} onEmergency={api.setEmergency} onCheckProject={api.checkProject} onAgentMode={api.setAgentMode} setup={state.setup} onSetup={api.setSetup} onBuilderFast={api.setBuilderFast} onPurge={api.purge} onOpenPanels={api.loadPanels}
         sync={state.sync} onUnlock={api.syncUnlock} onSyncNow={api.syncNow} layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
       <NudgeToast nudge={state.nudge} onAck={api.ackNudge} />
       <ApprovalModal approval={state.approval} onAnswer={api.answerApproval} />

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { GuardianState, Project, ScanResult } from '../types'
+import type { GuardianState, Project, ScanResult, SetupState } from '../types'
 
-const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', project_checked: 'Checked a project', agent_run: 'Agent task', agent_undo: 'Undid agent changes', project_fix_applied: 'Applied a fix', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
+const WORDS: Record<string, string> = { proposed: 'Asked you', mode_changed: 'Autopilot changed', emergency_changed: 'Emergency stop changed', project_checked: 'Checked a project', agent_run: 'Agent task', agent_undo: 'Undid agent changes', build_run: 'Built a project', build_undo: 'Undid a build', project_fix_applied: 'Applied a fix', approved: 'You approved', denied: 'You said no', done: 'Done', failed: 'Could not do it', expired: 'Expired' }
 const when = (ts: number) => new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const name = (p: string) => p.split(/[\\/]/).pop() ?? p
 
@@ -26,6 +26,34 @@ export function ProjectsPanel({ projects, onSave, onRemove, onCheck }: { project
       <button className="btn sm primary" disabled={!n.trim()} onClick={() => { onSave({ name: n, folder: f }); setN(''); setF('') }}>Add project</button>
     </div>
   </>)
+}
+
+export function SetupPanel({ s, onSet, onFast }: { s: SetupState | null; onSet: (id: string) => void; onFast: (w: 'cloud' | 'local') => void }) {
+  if (!s) return null
+  return (<>
+    <h3>How VANTA works</h3>
+    <p>Pick a setup. You can switch any time, even in the middle of a chat. You can also just say "switch to think mode".</p>
+    <div className="setups" role="radiogroup" aria-label="Setup">
+      {s.profiles.map((p) => <button key={p.id} className="setup-opt" role="radio" aria-checked={s.current === p.id} onClick={() => onSet(p.id)}><b>{p.label}</b><small>{p.desc}</small></button>)}
+    </div>
+    {s.current === 'builder' ? <div className="toggle" style={{ display: 'block' }}><div>The fast brain runs on<small>Free cloud is quicker. This laptop keeps the building private but is slower.</small></div>
+      <div className="seg" role="radiogroup" aria-label="Fast brain" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginTop: 8 }}>
+        {([['cloud', 'Free cloud'], ['local', 'This laptop']] as const).map(([v, l]) => <button key={v} role="radio" aria-checked={s.builder_fast === v} onClick={() => onFast(v)}>{l}</button>)}
+      </div></div> : null}
+    {s.current === 'offline' || (s.current === 'builder' && s.builder_fast === 'local') ? <p>{s.local_ready ? 'A local model is running here.' : 'No local model found yet. Install Ollama (ollama.com), then run: ollama pull qwen2.5:3b'}</p> : null}
+  </>)
+}
+
+export function SetupSwitcher({ s, onSet }: { s: SetupState | null; onSet: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  if (!s) return null
+  const cur = s.profiles.find((p) => p.id === s.current)
+  return (<div className="setup-chip" onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false) }}>
+    {open ? <div className="setup-pop" role="radiogroup" aria-label="Setup">
+      {s.profiles.map((p) => <button key={p.id} role="radio" aria-checked={s.current === p.id} onClick={() => { onSet(p.id); setOpen(false) }}><b>{p.label}</b><small>{p.desc}</small></button>)}
+    </div> : null}
+    <button className="chip" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>{cur?.label ?? s.current}</button>
+  </div>)
 }
 
 export function SafetyPanel({ g, onRestore, onMode, scans, onScan, onEmergency, onPurge, onAgentMode }: {
