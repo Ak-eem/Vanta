@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -494,7 +494,7 @@ def _extract_city(msg: str) -> str | None:
     return None
 
 def get_weather(msg: str) -> str:
-    if not WEATHER_API_KEY:
+    if not WEATHER_API_KEY or _offline():
         return ""
     city = _extract_city(msg)
     if not city:
@@ -519,6 +519,8 @@ def get_weather(msg: str) -> str:
 DEFAULT_CITY = os.environ.get("VANTA_DEFAULT_CITY", "Lagos")
 
 def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
+    if _offline():
+        return None
     """Structured weather for the presence-screen card. That card was
     hardcoded to 31°C / CLOUDY / RAIN 9PM permanently — this is the real
     fix, not a prose string like get_weather() returns for chat. Returns
@@ -562,6 +564,17 @@ def needs_live_knowledge(msg: str) -> bool:
     lower = msg.lower()
     return any(s in lower for s in signals)
 
+class OfflineBlocked(RuntimeError):
+    """Raised when something tries to reach the internet while the Offline setup is on."""
+
+
+setup_store = None   # set up below; Offline means nothing may leave this laptop
+
+
+def _offline() -> bool:
+    return bool(setup_store is not None and not setup_store.profile["cloud"])
+
+
 def pick_reasoning_effort(mode: str, is_ui: bool, needs_knowledge: bool,
                            think_mode: bool, has_history: bool = False) -> str:
     """Task type -> reasoning depth, so simple chat stays fast and only
@@ -603,7 +616,7 @@ def get_rag(msg: str) -> str:
         return ""
 
 def get_google(msg: str) -> str:
-    if not GOOGLE_OK:
+    if not GOOGLE_OK or _offline():
         return ""
     try:
         return google_search_context(msg) or ""
@@ -642,6 +655,8 @@ def build_thinking_prompt(sid: str, user_msg: str, mode: str, rag: str, google: 
 def stream_response(sid: str, messages: list, mode: str,
                      reasoning_effort: str = None, model: str = None) -> str:
     """Stream LLM output to the client token-by-token via Socket.IO."""
+    if _offline():
+        raise OfflineBlocked("Offline mode is on, so I did not use the internet.")
     full = ""
     params = dict(
         model=model or MODEL,
@@ -735,6 +750,8 @@ def stream_thinking(sid: str, messages: list) -> str:
 def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None,
                reasoning_effort: str = None, model: str = None) -> str:
     """Non-streaming single call (used for critique pass)."""
+    if _offline():
+        raise OfflineBlocked("Offline mode is on, so I did not use the internet.")
     params = dict(
         model=model or MODEL, messages=messages,
         max_tokens=max_tok or (4000 if mode == "CODE" else 2000),  # see stream_response — TPM, not the output ceiling
@@ -1074,6 +1091,7 @@ def on_connect():
         if card:
             socketio.emit("weather_card", card, room=sid)
     socketio.start_background_task(_send_weather)
+    _emit_setup_state(sid)
 
 @socketio.on("disconnect")
 def on_disconnect():
@@ -1123,6 +1141,13 @@ def handle_chat(data):
         msg = msg[match.end():].strip()
         if not msg:
             socketio.emit("response", {"text": "⚡ I'm awake. What do you need?"}, room=sid)
+            return
+
+    if SETUPS_OK:
+        if _setup_command(sid, msg):
+            return
+        if _offline():
+            _offline_chat(sid, msg)
             return
 
     # ── Answer to a clarifying question VANTA just asked ────────────────────
@@ -1214,8 +1239,12 @@ def handle_chat(data):
     socketio.emit("status", {"state": "thinking", "mode": mode}, room=sid)
     has_history = bool(conversations.get(sid))
     effort = pick_reasoning_effort(mode, is_ui, needs_knowledge, think_mode, has_history)
+    if SETUPS_OK and setup_store.profile["effort"]:
+        effort = setup_store.profile["effort"]          # Think with me: always the deepest thinking
     routed_model = pick_model(effort)
     messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    if SETUPS_OK and setup_store.profile["overlay"]:
+        messages[0]["content"] += "\n\n" + setup_store.profile["overlay"]
     if wants_stage(msg):
         messages[0]["content"] += "\n\n" + STAGE_PROMPT
     if AWARE_OK:
@@ -1326,6 +1355,132 @@ def handle_chat(data):
             "starting privacy policy + ToS afterward if you want one."},
             room=sid)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ██  SETUPS: Everyday / Think with me / Builder / Offline
+# ─────────────────────────────────────────────────────────────────────────────
+def _emit_setup_state(sid: str = None):
+    if not SETUPS_OK:
+        return
+    st = setup_store.state()
+    st["local_ready"] = router.local_ready()
+    if sid:
+        socketio.emit("setup_state", st, room=sid)
+    else:
+        socketio.emit("setup_state", st)
+
+
+def _run_build(sid: str, goal: str) -> None:
+    try:
+        strong, fast = router.pair()
+    except Unavailable as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    slug = "-".join(re.findall(r"[a-z0-9]+", goal.lower())[:4]) or "project"
+    workers = int(os.getenv("VANTA_BUILD_WORKERS", "2" if router.store.profile["cloud"] else "1"))
+    holder: dict = {}
+
+    def stage(run):
+        builds[run.id] = holder["b"]
+        socketio.emit("stage", build_stage(run, run.status == "running"), room=sid)
+
+    holder["b"] = Builder(strong, fast, WORKSPACE_ROOT / "builds", workers=workers, on_stage=stage)
+    socketio.emit("status", {"state": "thinking", "message": "Building…"}, room=sid)
+    try:
+        run = holder["b"].build(goal, slug)
+        if AWARE_OK:
+            guardian.audit.add("build_run", run.id, goal=goal[:100], status=run.status, changed=run.changed)
+        socketio.emit("response", {"text": run.final + (f" Folder: {run.root}" if run.changed else "")}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The build hit a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _run_probe(sid: str) -> None:
+    socketio.emit("response", {"text": "Testing this computer's disk, memory and processor. About 20 seconds."}, room=sid)
+    try:
+        socketio.emit("response", {"text": hw_describe(hw_probe())}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The speed test failed: {exc}"}, room=sid)
+
+
+def _setup_command(sid: str, msg: str) -> bool:
+    """Switching setups, /build and the speed test. Returns True when the message was fully handled here."""
+    if not SETUPS_OK:
+        return False
+    sw = parse_switch(msg)
+    if sw:
+        prof = setup_store.set(sw)
+        _emit_setup_state()
+        note = ""
+        if sw == "offline" and not router.local_ready():
+            note = " No local model is running yet. Install Ollama (ollama.com), run: ollama pull qwen2.5:3b, and I'll use it."
+        socketio.emit("response", {"text": f"Switched to {prof['label']}. {prof['desc']}{note}"}, room=sid)
+        return True
+    if re.match(r"^\s*(?:/probe|speed test|test (?:my|this) (?:laptop|computer|pc))\b", msg, re.I):
+        threading.Thread(target=_run_probe, args=(sid,), daemon=True).start()
+        return True
+    bm = re.match(r"^\s*/build\s+(.+)", msg, re.I | re.S)
+    if not bm and setup_store.current == "builder":
+        bm = re.match(r"^\s*build\s+((?:me\s+)?(?:a|an|the)\b.+)", msg, re.I | re.S)
+    if bm:
+        goal = bm.group(1).strip()
+        socketio.emit("response", {"text": "On it. A strong model plans and reviews, a fast one writes the files. Say stop any time, and I can undo the whole build."}, room=sid)
+        threading.Thread(target=_run_build, args=(sid, goal), daemon=True).start()
+        return True
+    if setup_store.current == "think":
+        d = parse_decision(msg)
+        nd = globals().get("notes_db")
+        if d and nd is not None:
+            try:
+                nd.add(d, kind="decision")
+            except Exception as exc:
+                print(f"[setups] could not save decision: {exc}")
+    return False
+
+
+def _offline_chat(sid: str, msg: str) -> None:
+    """Offline setup: the model on this laptop answers. No web, no cloud, no long-term memory extraction."""
+    socketio.emit("status", {"state": "thinking", "mode": "CHAT"}, room=sid)
+    try:
+        local = router.strong()
+        messages = build_prompt(sid, msg, "CHAT", "", "", "low")
+        messages[0]["content"] = messages[0]["content"][:6000] + "\n\n" + setup_store.profile["overlay"]
+        messages = [messages[0]] + messages[1:][-7:]
+        text = (local(messages) or "").strip() or "I did not get an answer from the local model."
+        socketio.emit("stream_chunk", {"chunk": text}, room=sid)
+        conversations.setdefault(sid, []).extend([{"role": "user", "content": msg}, {"role": "assistant", "content": text}])
+        socketio.emit("stream_done", {"model": "local", "mode": "CHAT"}, room=sid)
+    except Unavailable as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The local model had a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+@socketio.on("setup_get")
+def on_setup_get():
+    _emit_setup_state()
+
+
+@socketio.on("setup_set")
+def on_setup_set(data):
+    if SETUPS_OK:
+        try:
+            setup_store.set(str((data or {}).get("id", "")))
+        except ValueError:
+            return
+        _emit_setup_state()
+
+
+@socketio.on("setup_builder_fast")
+def on_setup_builder_fast(data):
+    if SETUPS_OK:
+        setup_store.set_builder_fast(str((data or {}).get("where", "cloud")))
+        _emit_setup_state()
+
+
 @socketio.on("chat_tools")
 def handle_chat_tools(data):
     """Opt-in testing ground for real tool-calling — completely separate
@@ -1380,6 +1535,17 @@ def on_stage_action(data):
     """Buttons on stage cards. `guard:` buttons are approvals for Guardian requests; pressing one is the approval."""
     sid = request.sid
     action = str((data or {}).get("action", ""))
+    if SETUPS_OK and action.startswith("build:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        b = builds.get(rid)
+        if verb == "stop" and b and b.run:
+            b.run.stop = True
+        elif verb == "undo" and b:
+            back = b.rewind()
+            if AWARE_OK:
+                guardian.audit.add("build_undo", rid, files=back)
+            socketio.emit("response", {"text": f"Undone. I removed or restored {len(back)} file(s)."}, room=sid)
+        return
     if AWARE_OK and action.startswith("agent:"):
         _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
         ag = agents.get(rid)
@@ -1737,6 +1903,54 @@ try:
 except Exception as _e:  # keep VANTA usable if an optional dependency is missing
     print(f"⚠️  Awareness layer unavailable: {_e}")
     AWARE_OK = False
+
+try:
+    from setups.profiles import SetupStore, PROFILES, parse_switch, parse_decision
+    from setups.router import Router, Unavailable, messages_to_prompt
+    from setups.pipeline import Builder
+    from setups.probe import probe as hw_probe, describe as hw_describe
+    from orchestrator.local_model import LocalClient
+    SETUPS_OK = True
+except Exception as _e:
+    print(f"⚠️  Setups unavailable: {_e}")
+    SETUPS_OK = False
+
+router = None
+builds: dict = {}
+
+
+def _retry(fn, tries: int = 4):
+    """Free tiers rate-limit in bursts: wait and try again instead of failing a whole build."""
+    for i in range(tries):
+        try:
+            return fn()
+        except OfflineBlocked:
+            raise
+        except Exception as exc:
+            if i == tries - 1 or not re.search(r"429|rate|limit|413|tokens per minute", str(exc), re.I):
+                raise
+            time.sleep(8 * (i + 1))
+
+
+if SETUPS_OK:
+    setup_store = SetupStore()
+
+    def _strong_cloud(msgs: list) -> str:
+        return _retry(lambda: call_once(msgs, "CODE", max_tok=2500, temp=0.2, model=SMART_MODEL))
+
+    def _fast_cloud(msgs: list) -> str:
+        """The fast brain spreads work over every free provider (with cooldowns), then falls back to the small Groq model."""
+        if _offline():
+            raise OfflineBlocked("Offline mode is on, so I did not use the internet.")
+        if ORCH_OK:
+            try:
+                flat = "\n\n".join(m["content"] for m in msgs if m["role"] != "system")
+                return orchestrator.pool.run(flat, "code", use_cache=False)[0]
+            except Exception as exc:
+                print(f"[builder] provider pool failed ({exc}); using Groq")
+        return _retry(lambda: call_once(msgs, "CODE", max_tok=2000, temp=0.2, model=FAST_MODEL))
+
+    router = Router(setup_store, _strong_cloud, _fast_cloud, LocalClient.from_env())
 
 privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
@@ -2123,6 +2337,8 @@ def transcribe():
         return jsonify({"error": "Unsupported audio type"}), 415
     if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
         return jsonify({"error": "Audio upload is too large"}), 413
+    if _offline():
+        return jsonify({"error": "Offline mode is on, so voice typing (which needs the internet) is off."}), 503
     tmp = Path(tempfile.gettempdir()) / f"vanta_ptt_{uuid.uuid4().hex}.webm"
     f.save(str(tmp))
     try:

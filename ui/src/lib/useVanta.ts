@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult } from '../types'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState } from '../types'
+import { sanitizeSetup } from './setup'
 import { sanitizeStage } from '../stage/sanitize'
 import { calmError } from './calmError'
 
@@ -24,6 +25,7 @@ export interface State {
   projects: Project[]
   guardian: GuardianState | null
   scans: ScanResult[]
+  setup: SetupState | null
 }
 
 type Action =
@@ -47,6 +49,7 @@ type Action =
   | { t: 'sync'; v: SyncState }
   | { t: 'projects'; v: Project[] }
   | { t: 'guardian'; v: GuardianState }
+  | { t: 'setup'; v: unknown }
   | { t: 'scans'; v: ScanResult[] }
   | { t: 'scan'; v: ScanResult }
 
@@ -55,7 +58,7 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null, scans: [],
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
 }
 
 export function reducer(s: State, a: Action): State {
@@ -101,6 +104,7 @@ export function reducer(s: State, a: Action): State {
     case 'sync': return { ...s, sync: a.v }
     case 'projects': return { ...s, projects: Array.isArray(a.v) ? a.v.slice(0, 50) : [] }
     case 'guardian': return { ...s, guardian: a.v }
+    case 'setup': return { ...s, setup: sanitizeSetup(a.v) ?? s.setup }
     case 'scans': return { ...s, scans: Array.isArray(a.v) ? a.v.slice(0, 30) : [] }
     case 'scan': return { ...s, scans: [a.v, ...s.scans.filter((x) => x.sha256 !== a.v.sha256)].slice(0, 30) }
     case 'tel': {
@@ -151,6 +155,7 @@ export function useVanta() {
     socket.on('scan_result', (d: ScanResult) => dispatch({ t: 'scan', v: d }))
     socket.on('projects', (d: Project[]) => dispatch({ t: 'projects', v: d }))
     socket.on('guardian_state', (d: GuardianState) => dispatch({ t: 'guardian', v: d }))
+    socket.on('setup_state', (d: unknown) => dispatch({ t: 'setup', v: d }))
     socket.on('sync_state', (d: SyncState) => dispatch({ t: 'sync', v: d }))
     socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {
@@ -202,6 +207,8 @@ export function useVanta() {
     checkProject: (id: string) => sock.current?.emit('project_check', { id }),
     saveProject: (p: Partial<Project>) => sock.current?.emit('project_save', p),
     removeProject: (id: string) => sock.current?.emit('project_remove', { id }),
+    setSetup: (id: string) => sock.current?.emit('setup_set', { id }),
+    setBuilderFast: (where: 'cloud' | 'local') => sock.current?.emit('setup_builder_fast', { where }),
     setGuardMode: (mode: 'ask' | 'auto') => sock.current?.emit('guardian_mode', { mode }),
     setAgentMode: (mode: string) => sock.current?.emit('agent_mode', { mode }),
     setEmergency: (on: boolean) => sock.current?.emit('guardian_emergency', { on }),
