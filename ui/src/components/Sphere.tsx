@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SphereEngine } from './SphereEngine'
 import type { SphereState } from '../types'
 import type { SphereSpot } from '../stage/layout'
@@ -11,12 +11,13 @@ const CANVAS = 340
 export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState; amplitude?: number; spot: SphereSpot; low: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const engine = useRef<SphereEngine | null>(null)
+  const [noGl, setNoGl] = useState(false)   // the soft gradient is only a stand-in when WebGL can't start
 
   useEffect(() => {
     const el = canvas.current
     if (!el) return
     let eng: SphereEngine
-    try { eng = new SphereEngine(el, low || (navigator.hardwareConcurrency ?? 4) <= 4) } catch { return }
+    try { eng = new SphereEngine(el, low || (navigator.hardwareConcurrency ?? 4) <= 4) } catch { setNoGl(true); return }
     engine.current = eng
     eng.resize(CANVAS, CANVAS)
     eng.setState(state)
@@ -42,7 +43,7 @@ export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState
         <circle className="r-arcs2" cx="220" cy="220" r="184" />
         {[0, 90, 180, 270].map((a) => <line key={a} className="r-cross" x1="220" y1="2" x2="220" y2="16" transform={`rotate(${a} 220 220)`} />)}
       </svg>
-      <div className="sphere-fallback" />
+      {noGl ? <div className="sphere-fallback" /> : null}
       <canvas ref={canvas} />
     </div>
   )

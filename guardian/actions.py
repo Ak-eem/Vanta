@@ -20,7 +20,7 @@ QUARANTINE = Path.home() / ".vanta" / "quarantine"
 PROTECTED_DIRS = ("c:\\windows", "c:\\program files", "c:\\program files (x86)", "/usr", "/bin", "/sbin", "/etc", "/lib", "/boot", "/system", "/library", "/applications")
 PROTECTED_NAMES = {"system", "system idle process", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
                    "svchost.exe", "explorer.exe", "dwm.exe", "init", "systemd", "launchd", "kernel_task"}
-RISK = {"quarantine": "medium", "end_process": "medium", "restore": "low", "purge": "medium"}
+RISK = {"quarantine": "medium", "end_process": "medium", "restore": "low", "purge": "medium", "uninstall": "high"}
 
 
 class Refused(Exception):
@@ -29,12 +29,14 @@ class Refused(Exception):
 
 class Guardian:
     def __init__(self, audit: AuditLog, qdir: Path = QUARANTINE, own_pids: Optional[set[int]] = None,
-                 ttl: int = 3600, clock: Callable[[], float] = time.time, pid_info=None, terminate=None) -> None:
+                 ttl: int = 3600, clock: Callable[[], float] = time.time, pid_info=None, terminate=None, programs=None, launcher=None) -> None:
         self.audit, self.qdir, self.ttl, self.clock = audit, Path(qdir), ttl, clock
         self.own = {os.getpid(), os.getppid()} | set(own_pids or ())
         self.pending: dict[str, dict] = {}
         self._info = pid_info or self._psutil_info
         self._terminate = terminate or self._psutil_terminate
+        self._programs = programs          # callable -> list of installed programs (see awareness.programs)
+        self._launch = launcher or self._popen
         self.emergency_log: list[dict] = []
         self.qdir.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +106,15 @@ class Guardian:
                 raise Refused("That process id now belongs to a different program, so I won't stop it.")
             if t.get("created") and abs(float(info.get("created") or 0) - float(t["created"])) > 2:
                 raise Refused("That process id was reused by a different program, so I won't stop it.")
+        elif kind == "uninstall":
+            from awareness.programs import find_by_id
+            entry = find_by_id(self._programs() if self._programs else [], str(t.get("id", "")))
+            if not entry:
+                raise Refused("I can't find that program in the installed list on this computer.")
+            if entry["protected"]:
+                raise Refused(f"{entry['name']} is part of Windows, a driver, or something other programs need. Removing it could break the computer, so I won't.")
+            if t.get("name") and entry["name"] != t["name"]:
+                raise Refused("That entry now belongs to a different program, so I won't remove it.")
         elif kind == "purge":
             if not (self.qdir / t.get("id", "x") / "meta.json").exists():
                 raise Refused("I can't find that quarantined file.")
@@ -155,6 +166,19 @@ class Guardian:
     def _do_end_process(self, t: dict) -> dict:
         self._terminate(int(t["pid"]), True) if t.get("tree") else self._terminate(int(t["pid"]))
         return {"ended": t.get("name"), "pid": t["pid"]}
+
+    def _do_uninstall(self, t: dict) -> dict:
+        """Starts the program's own uninstaller. It opens its own window, which is a second chance to say no."""
+        from awareness.programs import find_by_id, uninstall_command
+        entry = find_by_id(self._programs(), str(t["id"]))
+        cmd = uninstall_command(entry)
+        self._launch(cmd)
+        return {"started_uninstaller": entry["name"]}
+
+    @staticmethod
+    def _popen(cmd: str) -> None:
+        import subprocess
+        subprocess.Popen(cmd, shell=False)
 
     def quarantined(self) -> list[dict]:
         out = []

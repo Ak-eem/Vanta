@@ -56,3 +56,28 @@ export interface SetupProfile { id: string; label: string; desc: string }
 export interface SetupState { current: string; builder_fast: 'cloud' | 'local'; local_ready: boolean; profiles: SetupProfile[] }
 
 export interface ScanResult { sha256: string; name: string; path: string; ts: number; label: 'safe' | 'unknown' | 'suspicious' | 'dangerous'; score: number; reasons: string[]; vouched: string[]; family?: { family: string; does: string; you: string } | null; about?: string; publisher?: string; kind?: string }
+
+export interface HwProgram { name: string; count: number; cpu: number; mem: number; pid: number; created: number; protected: boolean }
+export interface HwFinding { level: 'warn' | 'note'; text: string }
+export interface HwState {
+  cpu: { pct: number; cores: number[]; freq: { mhz: number; max: number | null } | null; count: number; temp: number | null }
+  mem: { pct: number; used: number; total: number; swap: { pct: number; used: number; total: number } }
+  disk_io: { read: number; write: number }
+  net: { down: number; up: number }
+  thermal: { temps: { label: string; c: number; high?: number | null }[]; fans: { label: string; rpm: number }[]; source: string }
+  battery: { pct: number; plugged: boolean; mins: number | null } | null
+  uptime: number | null
+  history: Record<'cpu' | 'mem' | 'down' | 'up' | 'disk', number[]>
+  disks: { mount: string; fs: string; pct: number; used: number; total: number; free: number }[]
+  programs: HwProgram[]
+  findings: HwFinding[]
+  installed: { id: string; name: string; version: string; publisher: string; mb: number; protected: boolean }[]
+  can_uninstall: boolean
+  network: {
+    interfaces: { name: string; ip: string; speed: number | null }[]
+    listening: { port: number; program: string; scope: string; risk: string | null }[]
+    connected: { program: string; count: number; outside: number; sample: string[] }[]
+    security: { name: string; state: 'on' | 'off' | 'unknown'; note: string }[]
+    limited?: boolean
+  }
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState } from '../types'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState, HwState } from '../types'
 import { sanitizeSetup } from './setup'
 import { sanitizeStage } from '../stage/sanitize'
 import { calmError } from './calmError'
@@ -21,6 +21,7 @@ export interface State {
   speaking: boolean
   workspace: { filenames: string[]; run_cmd?: string } | null
   tel: Telemetry | null
+  hw: HwState | null
   sync: SyncState | null
   projects: Project[]
   guardian: GuardianState | null
@@ -46,6 +47,7 @@ type Action =
   | { t: 'concern'; ms: number }
   | { t: 'workspace'; v: State['workspace'] }
   | { t: 'tel'; v: unknown }
+  | { t: 'hw'; v: HwState }
   | { t: 'sync'; v: SyncState }
   | { t: 'projects'; v: Project[] }
   | { t: 'guardian'; v: GuardianState }
@@ -58,7 +60,7 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, hw: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
 }
 
 export function reducer(s: State, a: Action): State {
@@ -96,6 +98,7 @@ export function reducer(s: State, a: Action): State {
     case 'open': return { ...s, activeStageId: a.id }
     case 'pin': return { ...s, pinned: !s.pinned }
     case 'clearStage': return { ...s, activeStageId: null, pinned: false }
+    case 'hw': return { ...s, hw: a.v }
     case 'privacy': return { ...s, privacy: a.v }
     case 'nudge': return { ...s, nudge: a.v }
     case 'approval': return { ...s, approval: a.v }
@@ -138,7 +141,7 @@ export function useVanta() {
   useEffect(() => {
     const socket = io({ transports: ['websocket', 'polling'] })
     sock.current = socket
-    socket.on('connect', () => { dispatch({ t: 'conn', v: 'online' }); socket.emit('privacy_get'); socket.emit('sync_get') })
+    socket.on('connect', () => { dispatch({ t: 'conn', v: 'online' }); socket.emit('privacy_get'); socket.emit('sync_get'); socket.emit('hw_watch', { on: true }) })
     socket.on('disconnect', () => dispatch({ t: 'conn', v: 'offline' }))
     socket.on('connect_error', (err) => {
       dispatch({ t: 'conn', v: 'offline' })
@@ -157,6 +160,7 @@ export function useVanta() {
     socket.on('guardian_state', (d: GuardianState) => dispatch({ t: 'guardian', v: d }))
     socket.on('setup_state', (d: unknown) => dispatch({ t: 'setup', v: d }))
     socket.on('sync_state', (d: SyncState) => dispatch({ t: 'sync', v: d }))
+    socket.on('hw_state', (d: HwState) => dispatch({ t: 'hw', v: d }))
     socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {
       dispatch({ t: 'nudge', v: d })
@@ -223,6 +227,8 @@ export function useVanta() {
     pinStage: () => dispatch({ t: 'pin' }),
     clearStage: () => dispatch({ t: 'clearStage' }),
     stageAction: (stageId: string, actionId: string) => sock.current?.emit('stage_action', { stage: stageId, action: actionId }),
+    hwEnd: (pid: number) => sock.current?.emit('hw_end', { pid }),
+    hwUninstall: (id: string) => sock.current?.emit('hw_uninstall', { id }),
     dispatch,
   }), [send])
   return { state, api }

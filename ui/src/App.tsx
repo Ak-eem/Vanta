@@ -86,6 +86,7 @@ export default function App() {
 
       <div style={{ gridArea: phone ? 'main' : 'stage', display: phone && tab !== 'stage' ? 'none' : 'flex', minHeight: 0, minWidth: 0 }}>
         <StageView stage={stage} history={state.stages} pinned={state.pinned} sphere={sphere} amplitude={sphere === 'speaking' ? 0.5 : 0} low={fx === 'low'}
+          hw={state.hw} onEnd={api.hwEnd} onUninstall={api.hwUninstall} onAsk={(q) => { api.send(q); setTab('chat') }}
           caption={hud && state.tel?.app ? `Watching with you: ${state.tel.app}` : undefined}
           footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>

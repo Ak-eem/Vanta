@@ -1098,6 +1098,8 @@ def on_disconnect():
     conversations.pop(request.sid, None)
     awake_sessions.pop(request.sid, None)
     checklist_pending.pop(request.sid, None)
+    if board is not None:
+        board.watch(request.sid, False)
 
 def _guard_chat_handler(handler):
     def guarded(data):
@@ -1143,6 +1145,8 @@ def handle_chat(data):
             socketio.emit("response", {"text": "⚡ I'm awake. What do you need?"}, room=sid)
             return
 
+    if AWARE_OK and _system_command(sid, msg):
+        return
     if SETUPS_OK:
         if _setup_command(sid, msg):
             return
@@ -1402,6 +1406,107 @@ def _run_probe(sid: str) -> None:
         socketio.emit("response", {"text": hw_describe(hw_probe())}, room=sid)
     except Exception as exc:
         socketio.emit("response", {"text": f"The speed test failed: {exc}"}, room=sid)
+
+
+def _system_command(sid: str, msg: str) -> bool:
+    """'how is my laptop', 'close chrome', 'uninstall X'. Only handled when a real program matches; otherwise normal chat."""
+    if board is None:
+        return False
+    from vanta_ui import board as B
+    cmd = B.parse(msg)
+    if not cmd:
+        return False
+    kind, target = cmd
+    if kind == "status":
+        from awareness.hardware import describe
+        socketio.emit("response", {"text": describe(board.state())}, room=sid)
+        return True
+    if kind == "end":
+        hits = B.match_running([g for g in board.hw.slow(True)["programs"]], target)
+        if not hits:
+            return False
+        threading.Thread(target=_end_program, args=(sid, hits[0]), daemon=True).start()
+        return True
+    if kind == "uninstall":
+        hits = B.prog.find(board.programs(True), target)
+        if not hits:
+            return False
+        if len(hits) > 1:
+            socketio.emit("response", {"text": "Which one? " + ", ".join(h["name"] for h in hits[:5])}, room=sid)
+            return True
+        threading.Thread(target=_uninstall_program, args=(sid, hits[0]["id"]), daemon=True).start()
+        return True
+    return False
+
+
+def _end_program(sid: str, g: dict) -> None:
+    """Ask first, then stop the program and everything it started. Every step is in the audit log."""
+    try:
+        pr = guardian.propose("end_process", {"pid": g["pid"], "name": g["name"], "created": g["created"], "tree": True}, f"You asked me to stop {g['name']}.")
+    except Refused as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    more = f" ({g['count']} parts)" if g.get("count", 1) > 1 else ""
+    if not request_approval(sid, "Stop program", f"Stop {g['name']}{more} and anything it started. Unsaved work in it will be lost."):
+        guardian.deny(pr["id"])
+        socketio.emit("response", {"text": f"Okay, I left {g['name']} running."}, room=sid)
+        return
+    try:
+        guardian.approve(pr["id"])
+        socketio.emit("response", {"text": f"Stopped {g['name']}."}, room=sid)
+    except Refused as exc:
+        socketio.emit("response", {"text": f"I couldn't stop {g['name']}: {exc}"}, room=sid)
+    _emit_guardian_state()
+
+
+def _uninstall_program(sid: str, prog_id: str) -> None:
+    entry = next((p for p in board.programs() if p["id"] == prog_id), None)
+    name = entry["name"] if entry else "that program"
+    try:
+        pr = guardian.propose("uninstall", {"id": prog_id, "name": name}, f"You asked me to uninstall {name}.")
+    except Refused as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    if not request_approval(sid, "Uninstall program", f"Uninstall {name}. I'll start its own uninstaller, which shows its own window so you can still cancel there."):
+        guardian.deny(pr["id"])
+        socketio.emit("response", {"text": f"Okay, {name} stays installed."}, room=sid)
+        return
+    try:
+        guardian.approve(pr["id"])
+        socketio.emit("response", {"text": f"Started the uninstaller for {name}. Finish it in the window that just opened."}, room=sid)
+        board.programs(True)
+    except Refused as exc:
+        socketio.emit("response", {"text": f"I couldn't uninstall {name}: {exc}"}, room=sid)
+    _emit_guardian_state()
+
+
+@socketio.on("hw_watch")
+def on_hw_watch(data):
+    if board is None:
+        return
+    on = bool((data or {}).get("on", True))
+    board.watch(request.sid, on)
+    if on:
+        emit("hw_state", board.state())
+
+
+@socketio.on("hw_end")
+def on_hw_end(data):
+    if board is None:
+        return
+    pid = int((data or {}).get("pid") or 0)
+    g = next((x for x in board.hw.slow(True)["programs"] if x["pid"] == pid), None)
+    if not g:
+        emit("response", {"text": "That program has already closed."})
+        return
+    threading.Thread(target=_end_program, args=(request.sid, g), daemon=True).start()
+
+
+@socketio.on("hw_uninstall")
+def on_hw_uninstall(data):
+    if board is None:
+        return
+    threading.Thread(target=_uninstall_program, args=(request.sid, str((data or {}).get("id", ""))), daemon=True).start()
 
 
 def _setup_command(sid: str, msg: str) -> bool:
@@ -1952,7 +2057,7 @@ if SETUPS_OK:
 
     router = Router(setup_store, _strong_cloud, _fast_cloud, LocalClient.from_env())
 
-privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
+board = privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1961,7 +2066,13 @@ if AWARE_OK:
     activity_log = ActivityLog(privacy)
     people_db = People()
     projects_db = Projects()
-    guardian = Guardian(AuditLog())
+    from awareness.hardware import Hardware
+    from awareness.netinfo import NetBoard
+    from awareness import programs as _programs
+    from vanta_ui.board import Board
+    guardian = Guardian(AuditLog(), programs=lambda: _programs.installed())
+    board = Board(Hardware(), NetBoard(), lambda ev, d, sid: socketio.emit(ev, d, room=sid))
+    threading.Thread(target=board.run, name="vanta-board", daemon=True).start()
     guard_settings = GuardSettings()
 
     def _auto_notify(kind, d):
