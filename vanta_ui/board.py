@@ -14,8 +14,18 @@ END_RE = re.compile(r"^\s*(?:please\s+)?(?:end|close|stop|kill|quit|cancel)\s+(?
 UNINSTALL_RE = re.compile(r"^\s*(?:please\s+)?(?:uninstall|remove|delete)\s+(?:the\s+|my\s+)?(?:program\s+|app\s+)?(.+?)\s*[.!]*\s*$", re.I)
 
 
+FOCUS_RE = re.compile(r"^\s*(?:please\s+)?(?:show|focus on|open|pin|bring up)(?:\s+me)?(?:\s+(?:my|the))?\s+(processor|cpu|memory|ram|drives?|disks?|storage|heat|temperatures?|temp|fans?|programs?|apps|network|internet|wifi|connections?|security|firewall|antivirus|installed(?: programs)?)(?:\s+(?:card|panel|usage|info|status))?\s*[.!]*\s*$", re.I)
+CARD_OF = {"processor": "cpu", "cpu": "cpu", "memory": "mem", "ram": "mem", "drive": "disks", "drives": "disks", "disk": "disks", "disks": "disks", "storage": "disks",
+           "heat": "heat", "temperature": "heat", "temperatures": "heat", "temp": "heat", "fan": "heat", "fans": "heat", "program": "programs", "programs": "programs", "apps": "programs",
+           "network": "network", "internet": "network", "wifi": "network", "connection": "network", "connections": "network",
+           "security": "security", "firewall": "security", "antivirus": "security", "installed": "installed", "installed programs": "installed"}
+
+
 def parse(msg: str) -> Optional[tuple[str, str]]:
     """('status'|'end'|'uninstall', target). Only a hint: the caller still checks that a real program matches."""
+    m = FOCUS_RE.match(msg)
+    if m:
+        return "focus", CARD_OF[m.group(1).lower()]
     m = UNINSTALL_RE.match(msg)
     if m and len(m.group(1)) <= 60:
         return "uninstall", m.group(1)

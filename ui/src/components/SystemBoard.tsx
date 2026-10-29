@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { HwState, SphereState } from '../types'
 import { Sphere, STATE_LABEL } from './Sphere'
-import { disk, headline, heat, mb, rate, spark, tone, up } from '../lib/hw'
+import { disk, headline, heat, mb, rankCards, rate, spark, tone, up, type CardId } from '../lib/hw'
 
 function Ring({ pct, label, sub, big }: { pct: number; label: string; sub?: string; big?: boolean }) {
   const r = 42, c = 2 * Math.PI * r, t = tone(pct)
@@ -21,16 +21,17 @@ function Spark({ values, max, cls }: { values: number[]; max?: number; cls?: str
     <polyline points={`0,34 ${pts} 160,34`} className="fill" /><polyline points={pts} className="line" /></svg>)
 }
 
-function Card({ title, aside, children, wide }: { title: string; aside?: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
-  return (<section className={`bcard ${wide ? 'wide' : ''}`}><header><span className="k">{title}</span>{aside ? <span className="aside">{aside}</span> : null}</header>{children}</section>)
+function Card({ id, rank, title, aside, children, wide }: { id: CardId; rank: { order: CardId[]; alert: Set<CardId> } | null; title: string; aside?: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
+  return (<section className={`bcard ${wide ? 'wide' : ''} ${rank?.alert.has(id) ? 'alert' : ''}`} style={{ order: rank ? rank.order.indexOf(id) : 0 }}><header><span className="k">{title}</span>{aside ? <span className="aside">{aside}</span> : null}</header>{children}</section>)
 }
 
-export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, onAsk }: {
-  hw: HwState | null; sphere: SphereState; amplitude: number; low: boolean
+export function SystemBoard({ hw, focus, sphere, amplitude, low, onEnd, onUninstall, onAsk }: {
+  hw: HwState | null; focus?: CardId | null; sphere: SphereState; amplitude: number; low: boolean
   onEnd: (pid: number) => void; onUninstall: (id: string) => void; onAsk: (q: string) => void
 }) {
   const [q, setQ] = useState('')
   const [showInstalled, setShowInstalled] = useState(false)
+  const rank = useMemo(() => (hw ? rankCards(hw, focus) : null), [hw, focus])
   const head = hw ? headline(hw.findings) : null
   const apps = useMemo(() => (hw?.installed ?? []).filter((p) => p.name.toLowerCase().includes(q.toLowerCase())).slice(0, 40), [hw?.installed, q])
 
@@ -51,12 +52,12 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
 
       {!hw ? <div className="board-wait">Waiting for the first reading…</div> : (<>
         {hw.findings.length > 1 ? (
-          <Card title="THINGS I NOTICED" wide>
+          <Card id="installed" rank={null} title="THINGS I NOTICED" wide>
             <ul className="finds">{hw.findings.map((f, i) => <li key={i} className={f.level}><i />{f.text}</li>)}</ul>
           </Card>) : null}
 
         <div className="bgrid">
-          <Card title="PROCESSOR" aside={hw.cpu.freq ? `${(hw.cpu.freq.mhz / 1000).toFixed(1)} GHz` : undefined}>
+          <Card id="cpu" rank={rank} title="PROCESSOR" aside={hw.cpu.freq ? `${(hw.cpu.freq.mhz / 1000).toFixed(1)} GHz` : undefined}>
             <div className="gauge-row">
               <Ring pct={hw.cpu.pct} label="Processor" sub={hw.cpu.temp != null ? `${Math.round(hw.cpu.temp)}°C` : `${hw.cpu.count} cores`} />
               <div className="gauge-side"><Spark values={hw.history.cpu} max={100} /><div className="cores" aria-label="Per core load">
@@ -64,14 +65,14 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
             </div>
           </Card>
 
-          <Card title="MEMORY" aside={`${hw.mem.used} / ${hw.mem.total} GB`}>
+          <Card id="mem" rank={rank} title="MEMORY" aside={`${hw.mem.used} / ${hw.mem.total} GB`}>
             <div className="gauge-row">
               <Ring pct={hw.mem.pct} label="Memory" sub={hw.mem.swap.total ? `swap ${Math.round(hw.mem.swap.pct)}%` : undefined} />
               <div className="gauge-side"><Spark values={hw.history.mem} max={100} /><p className="hint">{hw.mem.pct >= 85 ? 'Tight. Close something heavy.' : 'Plenty of room.'}</p></div>
             </div>
           </Card>
 
-          <Card title="DRIVES" aside={`↓ ${disk(hw.disk_io.read)}  ↑ ${disk(hw.disk_io.write)}`}>
+          <Card id="disks" rank={rank} title="DRIVES" aside={`↓ ${disk(hw.disk_io.read)}  ↑ ${disk(hw.disk_io.write)}`}>
             {hw.disks.length ? hw.disks.map((d) => (
               <div className="drive" key={d.mount}>
                 <div className="drow"><span>{d.mount}</span><em>{d.free} GB free of {d.total}</em></div>
@@ -80,7 +81,7 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
             <Spark values={hw.history.disk} cls="alt" />
           </Card>
 
-          <Card title="HEAT & FANS" aside={hw.thermal.source !== 'none' ? hw.thermal.source : undefined}>
+          <Card id="heat" rank={rank} title="HEAT & FANS" aside={hw.thermal.source !== 'none' ? hw.thermal.source : undefined}>
             {hw.thermal.temps.length || hw.thermal.fans.length ? (<>
               <div className="temps">{hw.thermal.temps.slice(0, 6).map((t, i) => <div key={i} className={`temp ${heat(t.c)}`}><b>{Math.round(t.c)}°</b><span>{t.label}</span></div>)}</div>
               {hw.thermal.fans.length ? <div className="fans">{hw.thermal.fans.map((f, i) => <span key={i} className="fan"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 12c0-4 2-6 5-6-.5 3-2 5-5 6zm0 0c4 0 6 2 6 5-3-.5-5-2-6-5zm0 0c0 4-2 6-5 6 .5-3 2-5 5-6zm0 0c-4 0-6-2-6-5 3 .5 5 2 6 5z" fill="currentColor" /></svg>{f.rpm} rpm</span>)}</div> : null}
@@ -88,7 +89,7 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
             {hw.battery ? <div className="batt"><i className="meter cool"><b style={{ width: `${hw.battery.pct}%` }} /></i><span>Battery {hw.battery.pct}%{hw.battery.plugged ? ' · charging' : hw.battery.mins ? ` · ${Math.floor(hw.battery.mins / 60)}h ${hw.battery.mins % 60}m left` : ''}</span></div> : null}
           </Card>
 
-          <Card title="PROGRAMS" aside={`${hw.programs.length} busiest`} wide>
+          <Card id="programs" rank={rank} title="PROGRAMS" aside={`${hw.programs.length} busiest`} wide>
             <div className="ptable" role="table">
               <div className="prow phead" role="row"><span>Program</span><span>Processor</span><span>Memory</span><span /></div>
               {hw.programs.slice(0, 9).map((p) => (
@@ -101,13 +102,13 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
             </div>
           </Card>
 
-          <Card title="NETWORK" aside={`↓ ${rate(hw.net.down)}  ↑ ${rate(hw.net.up)}`}>
+          <Card id="network" rank={rank} title="NETWORK" aside={`↓ ${rate(hw.net.down)}  ↑ ${rate(hw.net.up)}`}>
             <div className="sparks"><Spark values={hw.history.down} /><Spark values={hw.history.up} cls="alt" /></div>
             {hw.network.interfaces.map((n) => <div className="kv" key={n.name}><span>{n.name}</span><em>{n.ip}{n.speed ? ` · ${n.speed} Mb/s` : ''}</em></div>)}
             {hw.network.connected.slice(0, 4).map((c) => <div className="kv" key={c.program}><span>{c.program}</span><em>{c.count} connections{c.outside ? ` · ${c.outside} to the internet` : ''}</em></div>)}
           </Card>
 
-          <Card title="SECURITY" aside={hw.network.limited ? 'limited view' : undefined}>
+          <Card id="security" rank={rank} title="SECURITY" aside={hw.network.limited ? 'limited view' : undefined}>
             <div className="sec">{hw.network.security.map((s) => (
               <div key={s.name} className={`secrow ${s.state}`}><i /><div><b>{s.name}: {s.state === 'unknown' ? 'not checked' : s.state}</b><span>{s.note}</span></div></div>))}</div>
             <div className="doors"><span className="k">OPEN DOORS</span>
@@ -117,7 +118,7 @@ export function SystemBoard({ hw, sphere, amplitude, low, onEnd, onUninstall, on
             </div>
           </Card>
 
-          <Card title="INSTALLED PROGRAMS" aside={hw.can_uninstall ? `${hw.installed.length}` : undefined} wide>
+          <Card id="installed" rank={rank} title="INSTALLED PROGRAMS" aside={hw.can_uninstall ? `${hw.installed.length}` : undefined} wide>
             {!hw.can_uninstall ? <p className="hint">Listing installed programs works on Windows. You can still tell me what to remove.</p> : (<>
               <button className="btn sm" aria-expanded={showInstalled} onClick={() => setShowInstalled((v) => !v)}>{showInstalled ? 'Hide list' : 'Show list'}</button>
               {showInstalled ? (<>

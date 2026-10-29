@@ -299,3 +299,20 @@ path.flow { animation: dash 1.4s linear infinite; } @keyframes dash { to { strok
   .prow { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 64px 56px; gap: 6px; }
   .bgrid { grid-template-columns: 1fr; }
 }
+
+/* ── Dashboard + chat arrangement (desktop) ───────────────────────────────── */
+.bcard.alert { border-color: rgba(242,179,94,.55); box-shadow: 0 0 0 1px rgba(242,179,94,.12), 0 0 24px rgba(242,179,94,.12); }
+.bcard.alert::before { background: var(--alert); width: 44px; }
+.pages { display: flex; gap: 4px; margin-left: 28px; margin-right: auto; }
+.pages button { background: transparent; border: 0; color: var(--muted); font-size: 14px; padding: 8px 14px; border-radius: 8px; position: relative; }
+.pages button[aria-selected='true'] { color: var(--text); background: var(--surface); }
+.pages .badge { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--alert); margin-left: 6px; }
+@media (min-width: 820px) {
+  .app[data-view='drawer'] { grid-template-columns: 1fr; grid-template-areas: "top" "stage"; }
+  .app[data-view='drawer'] .rail { position: fixed; top: var(--top); left: 0; bottom: 0; width: var(--rail); z-index: 30; background: var(--bg); border-right: 1px solid var(--border-2);
+    box-shadow: 24px 0 48px rgba(0,0,0,.5); transform: translateX(-104%); visibility: visible; padding: 20px 24px 16px; transition: transform .3s cubic-bezier(.3,.7,.2,1); }
+  .app[data-view='drawer'][data-rail='open'] .rail { transform: none; }
+  .app[data-view='pages'] { grid-template-columns: 1fr; grid-template-areas: "top" "stage"; }
+  .app[data-view='pages'] .rail { grid-area: stage; width: min(760px, 100%); margin: 0 auto; border: 0; }
+  .app[data-view='pages'] .rail[data-hidden='true'] { display: none; }
+}

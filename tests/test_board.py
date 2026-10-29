@@ -119,6 +119,9 @@ def test_parse_and_match():
     assert B.parse("close chrome") == ("end", "chrome")
     assert B.parse("Uninstall Cool Editor please"[:-7]) == ("uninstall", "Cool Editor")
     assert B.parse("how is my laptop doing")[0] == "status"
+    assert B.parse("show my network") == ("focus", "network")
+    assert B.parse("show me memory usage") == ("focus", "mem")
+    assert B.parse("show me my network diagram for the office") is None
     assert B.parse("tell me a joke") is None
     groups = make().snapshot()["programs"]
     assert B.match_running(groups, "chrome")[0]["name"] == "chrome.exe"

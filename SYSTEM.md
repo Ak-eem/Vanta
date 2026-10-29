@@ -14,3 +14,10 @@ firewall and antivirus status, and "things I noticed" in plain words.
 **Limits:** Windows rarely shares temperature/fan data; run LibreHardwareMonitor with its web server on (port 8085, or set `VANTA_LHM_URL`).
 Firewall/antivirus checks and the installed-program list/uninstall only work on Windows, and were not run on real Windows here (tested with fake data).
 Readings stream only while the page is open.
+
+## Dashboard and chat
+Settings > Dashboard and chat: **Chat drawer** (dashboard stays on screen, chat slides over it) or **Separate pages** (Dashboard / Chat tabs at the top). Phones always use tabs.
+
+## VANTA chooses what to show
+Cards that need attention (full memory, a hot processor, nearly full drive, firewall off, risky open port, a runaway program) rise to the top and glow amber without you asking.
+Say "show my network" (or memory, drives, heat, programs, security, installed) to bring a card to the front.

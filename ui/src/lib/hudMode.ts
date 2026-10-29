@@ -29,3 +29,9 @@ export function useHudMode(pref: LayoutPref, active: boolean): boolean {
   }, [pref, active, d.hud, until])
   return d.hud
 }
+
+/** How the dashboard and the chat share the screen. drawer: dashboard is home, chat slides over it. pages: separate Dashboard and Chat pages. */
+export type ViewPref = 'drawer' | 'pages'
+const VKEY = 'vanta.view'
+export const readView = (): ViewPref => { try { return localStorage.getItem(VKEY) === 'pages' ? 'pages' : 'drawer' } catch { return 'drawer' } }
+export const writeView = (v: ViewPref) => { try { localStorage.setItem(VKEY, v) } catch { /* fine */ } }

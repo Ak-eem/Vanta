@@ -22,6 +22,7 @@ export interface State {
   workspace: { filenames: string[]; run_cmd?: string } | null
   tel: Telemetry | null
   hw: HwState | null
+  focus: string | null
   sync: SyncState | null
   projects: Project[]
   guardian: GuardianState | null
@@ -48,6 +49,7 @@ type Action =
   | { t: 'workspace'; v: State['workspace'] }
   | { t: 'tel'; v: unknown }
   | { t: 'hw'; v: HwState }
+  | { t: 'focus'; card: string | null }
   | { t: 'sync'; v: SyncState }
   | { t: 'projects'; v: Project[] }
   | { t: 'guardian'; v: GuardianState }
@@ -60,7 +62,7 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, hw: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, hw: null, focus: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
 }
 
 export function reducer(s: State, a: Action): State {
@@ -99,6 +101,7 @@ export function reducer(s: State, a: Action): State {
     case 'pin': return { ...s, pinned: !s.pinned }
     case 'clearStage': return { ...s, activeStageId: null, pinned: false }
     case 'hw': return { ...s, hw: a.v }
+    case 'focus': return { ...s, focus: a.card, activeStageId: a.card ? null : s.activeStageId, pinned: a.card ? false : s.pinned }
     case 'privacy': return { ...s, privacy: a.v }
     case 'nudge': return { ...s, nudge: a.v }
     case 'approval': return { ...s, approval: a.v }
@@ -160,6 +163,7 @@ export function useVanta() {
     socket.on('guardian_state', (d: GuardianState) => dispatch({ t: 'guardian', v: d }))
     socket.on('setup_state', (d: unknown) => dispatch({ t: 'setup', v: d }))
     socket.on('sync_state', (d: SyncState) => dispatch({ t: 'sync', v: d }))
+    socket.on('hw_focus', (d: { card: string }) => dispatch({ t: 'focus', card: d.card }))
     socket.on('hw_state', (d: HwState) => dispatch({ t: 'hw', v: d }))
     socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {

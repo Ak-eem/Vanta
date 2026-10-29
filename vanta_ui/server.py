@@ -1417,6 +1417,10 @@ def _system_command(sid: str, msg: str) -> bool:
     if not cmd:
         return False
     kind, target = cmd
+    if kind == "focus":
+        socketio.emit("hw_focus", {"card": target}, room=sid)
+        socketio.emit("response", {"text": "Here it is on the dashboard."}, room=sid)
+        return True
     if kind == "status":
         from awareness.hardware import describe
         socketio.emit("response", {"text": describe(board.state())}, room=sid)

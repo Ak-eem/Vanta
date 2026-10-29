@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { STATE_LABEL } from './components/Sphere'
 import { Readouts } from './components/Readouts'
-import { readPref, useHudMode, writePref, type LayoutPref } from './lib/hudMode'
+import { readPref, readView, useHudMode, writePref, writeView, type LayoutPref, type ViewPref } from './lib/hudMode'
 import { useFx } from './lib/useFx'
 import { ChatList, Composer } from './components/Chat'
 import { ApprovalModal, NudgeToast, SettingsDrawer } from './components/Overlays'
@@ -21,8 +21,12 @@ function useIsPhone() {
 
 export default function App() {
   const { state, api } = useVanta()
-  const phone = useIsPhone()
-  const [tab, setTab] = useState<'chat' | 'stage'>('chat')
+  const isPhone = useIsPhone()
+  const phone = isPhone
+  const [view, setViewState] = useState<ViewPref>(readView)
+  const setView = (v: ViewPref) => { writeView(v); setViewState(v) }
+  const paged = phone || view === 'pages'
+  const [tab, setTab] = useState<'chat' | 'stage'>(() => (window.matchMedia('(max-width: 819px)').matches ? 'chat' : 'stage'))
   const [settings, setSettings] = useState(false)
   const [unseen, setUnseen] = useState(false)
   const [pref, setPrefState] = useState<LayoutPref>(readPref)
@@ -64,9 +68,14 @@ export default function App() {
   const sensesLine = `Senses: ${on.filter((n) => n !== 'screen').join(' · ') || 'none'}  |  Screen: ${state.privacy.sources.screen ? 'on' : 'off'}`
 
   return (
-    <div className="app" data-hud={hud ? 'on' : 'off'} data-rail={phone || railOpen ? 'open' : 'closed'}>
+    <div className="app" data-hud={hud ? 'on' : 'off'} data-view={view} data-rail={paged || railOpen ? 'open' : 'closed'}>
       <header className="topbar">
         <span className="wordmark">VANTA</span>
+        {!phone && view === 'pages' ? (
+          <nav className="pages" role="tablist" aria-label="Pages">
+            <button role="tab" aria-selected={tab === 'stage'} onClick={() => setTab('stage')}>Dashboard{unseen ? <span className="badge" aria-label="new" /> : null}</button>
+            <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>Chat</button>
+          </nav>) : null}
         <div className="top-right">
           <span className={`pill ${watching ? 'on' : ''}`} role="status"><span className="dot" /><span className="label-long">{pillText}</span><span className="label-short" style={{ display: phone ? 'inline' : 'none' }}>{state.privacy.paused ? 'Paused' : 'Watching'}</span></span>
           <button className="btn" onClick={() => api.pause(!state.privacy.paused)}>{state.privacy.paused ? 'Resume' : 'Pause'}</button>
@@ -76,7 +85,7 @@ export default function App() {
         </div>
       </header>
 
-      <aside className="rail" data-hidden={phone && tab !== 'chat'} onPointerDown={poke} onKeyDown={poke}>
+      <aside className="rail" data-hidden={paged && tab !== 'chat'} onPointerDown={poke} onKeyDown={poke}>
         {phone ? <div className={`state-label ${sphere}`}>{STATE_LABEL[sphere]}</div> : null}
         <div className="status-line">{state.statusText}</div>
         <ChatList messages={state.messages} onOpenStage={openStage} />
@@ -84,15 +93,15 @@ export default function App() {
         <div className="senses">{sensesLine}</div>
       </aside>
 
-      <div style={{ gridArea: phone ? 'main' : 'stage', display: phone && tab !== 'stage' ? 'none' : 'flex', minHeight: 0, minWidth: 0 }}>
+      <div style={{ gridArea: phone ? 'main' : 'stage', display: paged && tab !== 'stage' ? 'none' : 'flex', minHeight: 0, minWidth: 0 }}>
         <StageView stage={stage} history={state.stages} pinned={state.pinned} sphere={sphere} amplitude={sphere === 'speaking' ? 0.5 : 0} low={fx === 'low'}
-          hw={state.hw} onEnd={api.hwEnd} onUninstall={api.hwUninstall} onAsk={(q) => { api.send(q); setTab('chat') }}
+          hw={state.hw} focus={state.focus} onEnd={api.hwEnd} onUninstall={api.hwUninstall} onAsk={(q) => { api.send(q); setTab('chat') }}
           caption={hud && state.tel?.app ? `Watching with you: ${state.tel.app}` : undefined}
           footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>
 
       <SetupSwitcher s={state.setup} onSet={api.setSetup} />
-      {!phone && !railOpen ? <button className="dock" onClick={openRail} aria-label="Open chat"><span>Ask VANTA…</span></button> : null}
+      {!paged && !railOpen ? <button className="dock" onClick={openRail} aria-label="Open chat"><span>Ask VANTA…</span></button> : null}
 
       {phone && (
         <nav className="tabs" role="tablist">
@@ -103,7 +112,7 @@ export default function App() {
       {state.conn === 'offline' && <div className="offline-bar" role="status">Reconnecting… I'll be right back.</div>}
       <SettingsDrawer open={settings} privacy={state.privacy} onSource={api.setSource} onClose={() => setSettings(false)}
         projects={state.projects} guardian={state.guardian} onSaveProject={api.saveProject} onRemoveProject={api.removeProject} onRestore={api.restore} onGuardMode={api.setGuardMode} scans={state.scans} onScan={api.scanFile} onEmergency={api.setEmergency} onCheckProject={api.checkProject} onAgentMode={api.setAgentMode} setup={state.setup} onSetup={api.setSetup} onBuilderFast={api.setBuilderFast} onPurge={api.purge} onOpenPanels={api.loadPanels}
-        sync={state.sync} onUnlock={api.syncUnlock} onSyncNow={api.syncNow} layout={pref} onLayout={setPref} fx={fx} fxAuto={fxAuto} onFx={setFx} />
+        sync={state.sync} onUnlock={api.syncUnlock} onSyncNow={api.syncNow} layout={pref} onLayout={setPref} view={view} onView={setView} fx={fx} fxAuto={fxAuto} onFx={setFx} />
       <NudgeToast nudge={state.nudge} onAck={api.ackNudge} />
       <ApprovalModal approval={state.approval} onAnswer={api.answerApproval} />
     </div>)

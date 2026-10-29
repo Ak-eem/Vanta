@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { disk, headline, heat, mb, rate, spark, tone, up } from './hw'
+import { disk, headline, heat, mb, rankCards, rate, spark, tone, up } from './hw'
 
 describe('hw helpers', () => {
   it('formats rates and sizes', () => {
@@ -21,5 +21,13 @@ describe('hw helpers', () => {
     expect(headline([]).tone).toBe('ok')
     expect(headline([{ level: 'note' }]).tone).toBe('note')
     expect(headline([{ level: 'note' }, { level: 'warn' }]).tone).toBe('warn')
+  })
+  it('ranks cards that need attention first, and honours a focus request', () => {
+    const calm = { cpu: { pct: 10, temp: null }, mem: { pct: 30 }, disks: [{ pct: 40 }], programs: [], thermal: { temps: [] }, network: { security: [{ state: 'on' }], listening: [], connected: [] } }
+    expect(rankCards(calm).order[0]).toBe('cpu'); expect(rankCards(calm).alert.size).toBe(0)
+    const bad = { ...calm, mem: { pct: 95 }, network: { ...calm.network, security: [{ state: 'off' }] } }
+    const r = rankCards(bad)
+    expect(r.order.slice(0, 2)).toEqual(['security', 'mem']); expect(r.alert.has('mem')).toBe(true)
+    expect(rankCards(calm, 'network').order[0]).toBe('network')
   })
 })
