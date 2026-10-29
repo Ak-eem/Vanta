@@ -37,6 +37,7 @@ TOOL_HELP = """Tools (reply with ONE JSON object per turn, nothing else):
 {"tool":"bg_start","args":{"command":"npm run dev"}} / bg_output / bg_stop  with {"id":"..."}  long-running commands
 {"tool":"enter_worktree","args":{"name":"fix-login"}} / exit_worktree {"keep":true}  work in a separate git copy so the original stays untouched
 {"tool":"schedule_create","args":{"when":"daily 08:00","goal":"..."}} / schedule_list / schedule_delete {"id":"..."}  run a read-only check later or on repeat
+{"tool":"git_status","args":{}} / git_commit {"message":"..."} / git_push {"remote":"origin"} / github_pr {"title":"...","body":"..."}  save and send work to GitHub (asks first; never force-pushes; never commits secrets)
 {"tool":"skill","args":{"name":"..."}}  load a saved how-to (see the skills list below)
 {"tool":"notify","args":{"title":"...","message":"..."}}  tell the person something
 {"tool":"note","args":{"text":"something worth remembering across runs"}}

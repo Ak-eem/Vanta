@@ -14,6 +14,7 @@ from pathlib import Path
 from . import skills as skillmod
 from .permissions import Denied, check_secret, resolve_inside, split_command
 from .schedules import Schedules
+from . import gittools
 
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".cs", ".php", ".rb"}
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", "target"}
@@ -296,8 +297,10 @@ class Extra:
         return "Sent."
 
     def call(self, name: str, a: dict) -> str:
+        if name in ("git_status", "git_commit", "git_push", "github_pr"):
+            return getattr(gittools, name)(self.ag, a)
         return getattr(self, {"notify": "notify_user"}.get(name, name))(a)
 
 
 EXTRA_NAMES = {"task_create", "task_update", "task_list", "enter_plan_mode", "exit_plan_mode", "notebook_edit", "code_intel", "bg_start", "bg_output", "bg_stop",
-               "enter_worktree", "exit_worktree", "schedule_create", "schedule_list", "schedule_delete", "skill", "notify"}
+               "enter_worktree", "exit_worktree", "schedule_create", "schedule_list", "schedule_delete", "skill", "notify", "git_status", "git_commit", "git_push", "github_pr"}

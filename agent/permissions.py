@@ -13,9 +13,9 @@ from urllib.parse import urlparse
 
 MODES = ("plan", "ask", "accept_edits", "auto")
 READ_TOOLS = {"read_file", "list_files", "grep", "web_search", "web_fetch", "note", "ask_user", "subagent", "task_create", "task_update", "task_list", "enter_plan_mode",
-              "exit_plan_mode", "code_intel", "bg_output", "schedule_list", "skill", "notify"}
+              "exit_plan_mode", "code_intel", "bg_output", "schedule_list", "skill", "notify", "git_status"}
 # Always ask, never auto-approved. The tool itself shows you what it is about to do.
-ASK_TOOLS = {"bg_start", "bg_stop", "enter_worktree", "exit_worktree", "schedule_create", "schedule_delete"}
+ASK_TOOLS = {"bg_start", "bg_stop", "enter_worktree", "exit_worktree", "schedule_create", "schedule_delete", "git_commit", "git_push", "github_pr"}
 EDIT_TOOLS = {"write_file", "edit_file", "notebook_edit"}
 SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.pfx", "*.p12", "credentials*", "secrets*", ".npmrc", ".pypirc", "*.kdbx", "wallet*.dat")
 SECRET_DIRS = {".ssh", ".aws", ".gnupg", ".kube", ".azure"}
