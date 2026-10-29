@@ -12,6 +12,7 @@ Everything the agent can do, grouped. Anything that changes things or runs somet
 | Helpers | `subagent` (read-only helper with its own clean context) |
 | Later | `schedule_create` / `schedule_list` / `schedule_delete` ("daily 08:00", "every 30m", "in 2h", "weekdays 09:30", "mon 07:00"). Scheduled runs are read-only and report back as a note. |
 | Know-how | `skill` loads a saved how-to. Put your own in `~/.vanta/skills/*.md` or `<project>/.vanta/skills/`. Starters in `skills/`: website-build, code-review, security-review, debugging. |
+| GitHub | `git_status`, `git_commit` (secret files never included), `git_push` (no force-push; warns on main), `github_pr` (needs the `gh` app). Uses the git login already on your computer; VANTA never sees a token. |
 | Talk | `note` (remember), `ask_user`, `notify` |
 
 Not built (no use in VANTA's app): LSP server, PowerShell tool, MCP resources, SendMessage between helpers, feedback/onboarding tools. File sending to you needs a download card in the UI first.

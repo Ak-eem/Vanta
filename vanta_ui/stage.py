@@ -173,6 +173,27 @@ def agent_stage(run, working: bool) -> dict:
     return stg
 
 
+def orchestra_stage(run, working: bool) -> dict:
+    """Live view of a manager and its worker agents. Updated on every change (same id)."""
+    mark = {"done": "done", "doing": "active", "failed": "active", "skipped": "active", "todo": "todo"}
+    items = [{"label": f"{t.goal[:58]}" + (" (retrying)" if t.status == "doing" and t.retries else "") + (" (failed)" if t.status == "failed" else " (skipped)" if t.status == "skipped" else ""),
+              "state": mark.get(t.status, "todo")} for t in run.tasks]
+    if run.status == "planning":
+        items = [{"label": "Manager is planning the jobs", "state": "active"}]
+    blocks = [{"id": "goal", "type": "node", "title": "Goal", "data": {"value": run.goal[:60]}},
+              {"id": "team", "type": "steps", "title": "Manager and workers", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None, "data": {"items": items}}]
+    links = [{"from": "goal", "to": "team", "label": "split into jobs"}]
+    actions = [{"id": f"team:stop:{run.id}", "label": "Stop", "kind": "secondary"}] if working else [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if not working:
+        blocks.append({"id": "res", "type": "text", "title": "Manager's summary", "tone": "good" if run.status == "done" else "warn", "data": {"body": run.final or "Finished."}})
+        links.append({"from": "team", "to": "res", "label": "result"})
+        if run.changed:
+            actions = [{"id": f"team:undo:{run.id}", "label": f"Undo the team's changes ({len(run.changed)} file{'s' if len(run.changed) > 1 else ''})", "kind": "secondary"}, {"id": "dismiss", "label": "Keep them", "kind": "ghost"}]
+    stg = make_stage(("Team: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
+    stg["id"] = f"team-{run.id}"
+    return stg
+
+
 _BUILD_STEPS = [("blueprint", "Plan the build (strong brain)"), ("writing files", "Write the files (fast brain)"),
                 ("senior review", "Senior review (strong brain)"), ("checking", "Checks and fixes")]
 
