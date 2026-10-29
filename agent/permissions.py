@@ -12,8 +12,11 @@ from typing import Optional
 from urllib.parse import urlparse
 
 MODES = ("plan", "ask", "accept_edits", "auto")
-READ_TOOLS = {"read_file", "list_files", "grep", "web_search", "web_fetch", "note", "ask_user", "subagent"}
-EDIT_TOOLS = {"write_file", "edit_file"}
+READ_TOOLS = {"read_file", "list_files", "grep", "web_search", "web_fetch", "note", "ask_user", "subagent", "task_create", "task_update", "task_list", "enter_plan_mode",
+              "exit_plan_mode", "code_intel", "bg_output", "schedule_list", "skill", "notify"}
+# Always ask, never auto-approved. The tool itself shows you what it is about to do.
+ASK_TOOLS = {"bg_start", "bg_stop", "enter_worktree", "exit_worktree", "schedule_create", "schedule_delete"}
+EDIT_TOOLS = {"write_file", "edit_file", "notebook_edit"}
 SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.pfx", "*.p12", "credentials*", "secrets*", ".npmrc", ".pypirc", "*.kdbx", "wallet*.dat")
 SECRET_DIRS = {".ssh", ".aws", ".gnupg", ".kube", ".azure"}
 NEVER_RUN = {"rm", "rmdir", "del", "erase", "format", "diskpart", "shutdown", "reboot", "reg", "regedit", "netsh", "sc", "taskkill", "kill", "pkill", "chmod",
@@ -74,6 +77,8 @@ def decide(mode: str, tool: str, args: dict) -> str:
         return "allow"
     if mode == "plan":
         raise Denied("I'm in plan mode, so I can look but not change anything. Switch modes to let me make changes.")
+    if tool in ASK_TOOLS:
+        return "ask"
     if tool in EDIT_TOOLS:
         return "allow" if mode in ("accept_edits", "auto") else "ask"
     if tool == "run_command":

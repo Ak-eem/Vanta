@@ -1714,6 +1714,34 @@ doctor_reports: dict = {}
 agents: dict = {}
 
 
+def _run_scheduled(job: dict) -> None:
+    """A scheduled task: read-only, nobody is asked anything, the result comes to you as a note."""
+    root = Path(job.get("folder") or WORKSPACE)
+    if not root.is_dir():
+        root = Path(WORKSPACE)
+    try:
+        ag = Agent(lambda msgs: call_once(msgs, "CODE", max_tok=1200, temp=0.2), root, "plan", approve=lambda a, d: False,
+                   web_search=(lambda q: get_google(q)) if GOOGLE_OK else None, max_steps=15)
+        run = ag.execute(job["goal"])
+        text = f"Scheduled task ({job['when']}): {run.final or 'finished'}"
+    except Exception as exc:
+        text = f"Scheduled task ({job['when']}) failed: {exc}"
+    guardian and guardian.audit.add("scheduled_run", job["id"], goal=job["goal"][:100])
+    socketio.emit("response", {"text": text})
+    if nudges:
+        nudges.nudge(f"sched:{job['id']}", "low", "Scheduled task finished", text[:200])
+
+
+def _scheduler_loop() -> None:
+    while True:
+        time.sleep(30)
+        try:
+            for job in schedule_store.due():
+                threading.Thread(target=_run_scheduled, args=(job,), daemon=True).start()
+        except Exception as exc:
+            print(f"[schedules] {exc}")
+
+
 def _run_agent(sid: str, goal: str, root: Path) -> None:
     """Runs the agent loop for a goal. Edits and commands follow the permission mode; every approval is a pop-up you answer."""
     mode = guard_settings.data.get("agent_mode", "ask")
@@ -1724,7 +1752,8 @@ def _run_agent(sid: str, goal: str, root: Path) -> None:
                approve=lambda action, detail: request_approval(sid, action, detail),
                ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
                web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
-               on_step=lambda st: push(True))
+               on_step=lambda st: push(True),
+               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None)
     agents[ag.run.id] = ag
     socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
     try:
@@ -1952,6 +1981,7 @@ if SETUPS_OK:
 
     router = Router(setup_store, _strong_cloud, _fast_cloud, LocalClient.from_env())
 
+schedule_store = None
 privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
@@ -1962,6 +1992,8 @@ if AWARE_OK:
     people_db = People()
     projects_db = Projects()
     guardian = Guardian(AuditLog())
+    from agent.schedules import Schedules
+    schedule_store = Schedules()
     guard_settings = GuardSettings()
 
     def _auto_notify(kind, d):
@@ -2245,6 +2277,7 @@ def start_awareness(port: int) -> None:
             except Exception as exc:
                 print(f"[telemetry] {exc}")
     threading.Thread(target=_telemetry_loop, name="vanta-telemetry", daemon=True).start()
+    threading.Thread(target=_scheduler_loop, name="vanta-schedules", daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
