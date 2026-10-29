@@ -86,7 +86,9 @@ def test_net_and_security():
         return json.dumps({"AntivirusEnabled": True, "RealTimeProtectionEnabled": True, "AntivirusSignatureAge": 9})
     sec = netinfo.security_checks(run, platform="win32")
     assert sec[0]["state"] == "off" and sec[1]["state"] == "on" and "9 days" in sec[1]["note"]
-    assert netinfo.security_checks(run, platform="linux")[0]["state"] == "unknown"
+    lin = netinfo.security_checks(lambda argv, timeout=6: "active\n" if argv[-1] == "ufw" else "inactive\n", platform="linux")
+    assert lin[0]["state"] == "on" and "ufw" in lin[0]["note"] and lin[1]["state"] == "unknown"
+    assert netinfo.security_checks(run, platform="darwin")[0]["state"] == "unknown"
     n = {"security": sec, "listening": [{"port": 3389, "program": "svchost.exe", "scope": "everyone", "risk": "Remote Desktop"}], "connected": [{"program": "x.exe", "count": 30, "outside": 30}]}
     texts = " ".join(f["text"] for f in netinfo.net_findings(n))
     assert "Firewall is off" in texts and "anywhere on port 3389" in texts and "x.exe has 30" in texts

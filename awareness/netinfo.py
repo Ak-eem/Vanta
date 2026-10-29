@@ -105,9 +105,16 @@ def _run(argv: list[str], timeout: float = 6.0) -> str:
 def security_checks(run: Callable[..., str] = _run, platform: Optional[str] = None) -> list[dict]:
     """Basic protections. state: on / off / unknown. Only Windows is checked; elsewhere everything is 'unknown'."""
     plat = platform or sys.platform
+    if plat.startswith("linux"):
+        def active(unit: str) -> bool:
+            return run(["systemctl", "is-active", unit]).strip() == "active"
+        fw = next((u for u in ("ufw", "firewalld", "nftables") if active(u)), None)
+        av = next((u for u in ("clamav-daemon", "clamd@scan") if active(u)), None)
+        return [{"name": "Firewall", "state": "on" if fw else "unknown", "note": f"{fw} is running." if fw else "I couldn't confirm one (ufw, firewalld or nftables)."},
+                {"name": "Antivirus", "state": "on" if av else "unknown", "note": "ClamAV is running." if av else "None detected. Optional on Linux; VANTA's own scanner still checks downloads."}]
     if not plat.startswith("win"):
-        return [{"name": "Firewall", "state": "unknown", "note": "I only check this on Windows."},
-                {"name": "Antivirus", "state": "unknown", "note": "I only check this on Windows."}]
+        return [{"name": "Firewall", "state": "unknown", "note": "I only check this on Windows and Linux."},
+                {"name": "Antivirus", "state": "unknown", "note": "I only check this on Windows and Linux."}]
     out = []
     fw = run(["netsh", "advfirewall", "show", "allprofiles", "state"])
     states = [ln.split()[-1].upper() for ln in fw.splitlines() if ln.strip().upper().startswith("STATE")]
