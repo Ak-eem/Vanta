@@ -312,6 +312,9 @@ path.flow { animation: dash 1.4s linear infinite; } @keyframes dash { to { strok
   .app[data-view='drawer'] .rail { position: fixed; top: var(--top); left: 0; bottom: 0; width: var(--rail); z-index: 30; background: var(--bg); border-right: 1px solid var(--border-2);
     box-shadow: 24px 0 48px rgba(0,0,0,.5); transform: translateX(-104%); visibility: visible; padding: 20px 24px 16px; transition: transform .3s cubic-bezier(.3,.7,.2,1); }
   .app[data-view='drawer'][data-rail='open'] .rail { transform: none; }
+  .app[data-view='drawer'] { padding-left: 0; transition: padding-left .3s cubic-bezier(.3,.7,.2,1); }
+  .app[data-view='drawer'][data-rail='open'] { padding-left: var(--rail); }
+  .app[data-view='drawer'][data-rail='open'] .topbar { margin-left: calc(-1 * var(--rail)); padding-left: 24px; }
   .app[data-view='pages'] { grid-template-columns: 1fr; grid-template-areas: "top" "stage"; }
   .app[data-view='pages'] .rail { grid-area: stage; width: min(760px, 100%); margin: 0 auto; border: 0; }
   .app[data-view='pages'] .rail[data-hidden='true'] { display: none; }

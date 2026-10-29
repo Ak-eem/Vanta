@@ -81,7 +81,7 @@ export function SystemBoard({ hw, focus, sphere, amplitude, low, onEnd, onUninst
             <Spark values={hw.history.disk} cls="alt" />
           </Card>
 
-          <Card id="heat" rank={rank} title="HEAT & FANS" aside={hw.thermal.source !== 'none' ? hw.thermal.source : undefined}>
+          <Card id="heat" rank={rank} title="HEAT & FANS" wide={!(hw.thermal.temps.length || hw.thermal.fans.length)} aside={hw.thermal.source !== 'none' ? hw.thermal.source : undefined}>
             {hw.thermal.temps.length || hw.thermal.fans.length ? (<>
               <div className="temps">{hw.thermal.temps.slice(0, 6).map((t, i) => <div key={i} className={`temp ${heat(t.c)}`}><b>{Math.round(t.c)}°</b><span>{t.label}</span></div>)}</div>
               {hw.thermal.fans.length ? <div className="fans">{hw.thermal.fans.map((f, i) => <span key={i} className="fan"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 12c0-4 2-6 5-6-.5 3-2 5-5 6zm0 0c4 0 6 2 6 5-3-.5-5-2-6-5zm0 0c0 4-2 6-5 6 .5-3 2-5 5-6zm0 0c-4 0-6-2-6-5 3 .5 5 2 6 5z" fill="currentColor" /></svg>{f.rpm} rpm</span>)}</div> : null}
