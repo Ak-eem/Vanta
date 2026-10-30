@@ -32,6 +32,11 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
 from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage
+try:
+    from utils.route import needs_route, get_route      # free OpenStreetMap routing, no key
+    ROUTE_OK = True
+except Exception as _route_exc:                         # optional: chat works without it
+    ROUTE_OK = False
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1193,7 +1198,8 @@ def handle_chat(data):
     # Non-blocking executor so hung lookups never stall the response
     needs_knowledge = needs_live_knowledge(msg)
     is_weather = needs_weather(msg)
-    if needs_knowledge or is_weather:
+    is_route = ROUTE_OK and not _offline() and needs_route(msg)
+    if needs_knowledge or is_weather or is_route:
         socketio.emit("status", {"state": "learning", "message": "Searching knowledge…"}, room=sid)
 
     mode_f = _BACKGROUND_POOL.submit(detect_mode, msg)
@@ -1203,7 +1209,8 @@ def handle_chat(data):
         google_f = None
     else:
         weather_f = None
-        google_f = _BACKGROUND_POOL.submit(get_google, msg) if (GOOGLE_OK and needs_knowledge) else None
+        google_f = _BACKGROUND_POOL.submit(get_google, msg) if (GOOGLE_OK and needs_knowledge and not is_route) else None
+    route_f = _BACKGROUND_POOL.submit(get_route, msg, DEFAULT_CITY) if is_route else None
 
     try:
         mode = mode_f.result(timeout=2)
@@ -1229,6 +1236,15 @@ def handle_chat(data):
         except Exception:
             google_ctx = ""
 
+    route_ctx = ""
+    if route_f:
+        try:
+            route_ctx, route_card = route_f.result(timeout=8)
+            if route_card:
+                socketio.emit("route_card", route_card, room=sid)    # screens can draw it later; chat ignores it
+        except Exception:
+            route_ctx = ""
+
     if is_weather and not weather_ctx and GOOGLE_OK:
         try:
             google_ctx = get_google(msg)
@@ -1242,7 +1258,7 @@ def handle_chat(data):
     if SETUPS_OK and setup_store.profile["effort"]:
         effort = setup_store.profile["effort"]          # Think with me: always the deepest thinking
     routed_model = pick_model(effort)
-    messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or route_ctx or google_ctx, effort)
     if SETUPS_OK and setup_store.profile["overlay"]:
         messages[0]["content"] += "\n\n" + setup_store.profile["overlay"]
     if wants_stage(msg):
