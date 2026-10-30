@@ -32,3 +32,7 @@ different model sizes would run on this computer. The numbers are estimates.
 - Free providers rate-limit; builds wait and retry instead of failing.
 - Prompts sent to cloud providers can be seen by them. Use Offline for private work.
 - Offline answers are only as good as the small local model.
+
+
+## Orchestra (manager and workers)
+Switch with "switch to team mode". `/team <goal>` (or, in this setup, just "fix ...", "add ...", "review ...") makes the strong model split the goal into at most 6 small jobs. Small fast agents do each job with the real tools (read-only jobs run in plan mode), the manager checks each result and can send one job back once, then writes the summary. Each worker only sees its job and the results it depends on, so small models stay focused and use fewer tokens. Same approvals as the normal agent; one click undoes every file the team changed.

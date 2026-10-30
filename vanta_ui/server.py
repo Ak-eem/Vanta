@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage, orchestra_stage
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -680,7 +680,7 @@ def stream_response(sid: str, messages: list, mode: str,
         max_tokens=4000 if mode == "CODE" else 2000,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
-        include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
+        extra_body={"include_reasoning": False},  # sent as a raw field so older Groq SDKs (like the pinned 0.18) don't choke. GPT-OSS puts reasoning in its own field by
                                    # default — we never read that field, so on
                                    # short/trivial input the model can spend its
                                    # whole turn there and leave content empty.
@@ -756,7 +756,7 @@ def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None
         model=model or MODEL, messages=messages,
         max_tokens=max_tok or (4000 if mode == "CODE" else 2000),  # see stream_response — TPM, not the output ceiling
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
-        include_reasoning=False,
+        extra_body={"include_reasoning": False},      # raw field: works on every Groq SDK version
     )
     if reasoning_effort:
         params["reasoning_effort"] = reasoning_effort
@@ -1400,6 +1400,33 @@ def _run_build(sid: str, goal: str) -> None:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
 
+def _run_orchestra(sid: str, goal: str, root: Path) -> None:
+    """A strong manager splits the goal; small agents do the jobs with the real tools. Every approval is still a pop-up you answer."""
+    try:
+        strong, fast = router.pair()
+    except Unavailable as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    holder: dict = {}
+    mode = guard_settings.data.get("agent_mode", "ask")
+
+    def push(run):
+        socketio.emit("stage", orchestra_stage(run, run.status in ("planning", "running")), room=sid)
+
+    o = Orchestra(strong, fast, root, mode, approve=lambda a, d: request_approval(sid, a, d),
+                  web_search=(lambda q: get_google(q)) if GOOGLE_OK else None, on_update=push)
+    orchs[o.run_.id] = o
+    socketio.emit("status", {"state": "thinking", "message": "The team is working…"}, room=sid)
+    try:
+        run = o.run(goal)
+        guardian.audit.add("team_run", run.id, goal=goal[:100], status=run.status, changed=run.changed, mode=mode)
+        socketio.emit("response", {"text": run.final or "Finished."}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The team hit a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
 def _run_probe(sid: str) -> None:
     socketio.emit("response", {"text": "Testing this computer's disk, memory and processor. About 20 seconds."}, room=sid)
     try:
@@ -1529,6 +1556,16 @@ def _setup_command(sid: str, msg: str) -> bool:
     if re.match(r"^\s*(?:/probe|speed test|test (?:my|this) (?:laptop|computer|pc))\b", msg, re.I):
         threading.Thread(target=_run_probe, args=(sid,), daemon=True).start()
         return True
+    tm = re.match(r"^\s*/team\s+(.+)", msg, re.I | re.S)
+    if not tm and setup_store.current == "orchestra" and AWARE_OK:
+        tm = re.match(r"^\s*((?:please\s+)?(?:fix|build|add|make|find|check|review|refactor|update|write|investigate|implement|clean up|improve|debug)\b.+)", msg, re.I | re.S)
+    if tm and AWARE_OK:
+        goal = tm.group(1).strip()
+        hit = projects_db.mentioned_in(goal)
+        root = Path(hit[0]["folder"]) if hit and hit[0].get("folder") and Path(hit[0]["folder"]).is_dir() else Path(WORKSPACE)
+        socketio.emit("response", {"text": f"On it. A strong model will split this up and small agents will do the parts, in {root.name} ({guard_settings.data.get('agent_mode', 'ask')} mode). Say stop any time, and I can undo their changes."}, room=sid)
+        threading.Thread(target=_run_orchestra, args=(sid, goal, root), daemon=True).start()
+        return True
     bm = re.match(r"^\s*/build\s+(.+)", msg, re.I | re.S)
     if not bm and setup_store.current == "builder":
         bm = re.match(r"^\s*build\s+((?:me\s+)?(?:a|an|the)\b.+)", msg, re.I | re.S)
@@ -1654,6 +1691,16 @@ def on_stage_action(data):
             if AWARE_OK:
                 guardian.audit.add("build_undo", rid, files=back)
             socketio.emit("response", {"text": f"Undone. I removed or restored {len(back)} file(s)."}, room=sid)
+        return
+    if SETUPS_OK and AWARE_OK and action.startswith("team:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        o = orchs.get(rid)
+        if verb == "stop" and o:
+            o.stop()
+        elif verb == "undo" and o:
+            back = o.rewind()
+            guardian.audit.add("team_undo", rid, files=back)
+            socketio.emit("response", {"text": f"Undone. I put back {len(back)} file(s) exactly as they were."}, room=sid)
         return
     if AWARE_OK and action.startswith("agent:"):
         _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
@@ -1823,6 +1870,34 @@ doctor_reports: dict = {}
 agents: dict = {}
 
 
+def _run_scheduled(job: dict) -> None:
+    """A scheduled task: read-only, nobody is asked anything, the result comes to you as a note."""
+    root = Path(job.get("folder") or WORKSPACE)
+    if not root.is_dir():
+        root = Path(WORKSPACE)
+    try:
+        ag = Agent(lambda msgs: call_once(msgs, "CODE", max_tok=1200, temp=0.2), root, "plan", approve=lambda a, d: False,
+                   web_search=(lambda q: get_google(q)) if GOOGLE_OK else None, max_steps=15)
+        run = ag.execute(job["goal"])
+        text = f"Scheduled task ({job['when']}): {run.final or 'finished'}"
+    except Exception as exc:
+        text = f"Scheduled task ({job['when']}) failed: {exc}"
+    guardian and guardian.audit.add("scheduled_run", job["id"], goal=job["goal"][:100])
+    socketio.emit("response", {"text": text})
+    if nudges:
+        nudges.nudge(f"sched:{job['id']}", "low", "Scheduled task finished", text[:200])
+
+
+def _scheduler_loop() -> None:
+    while True:
+        time.sleep(30)
+        try:
+            for job in schedule_store.due():
+                threading.Thread(target=_run_scheduled, args=(job,), daemon=True).start()
+        except Exception as exc:
+            print(f"[schedules] {exc}")
+
+
 def _run_agent(sid: str, goal: str, root: Path) -> None:
     """Runs the agent loop for a goal. Edits and commands follow the permission mode; every approval is a pop-up you answer."""
     mode = guard_settings.data.get("agent_mode", "ask")
@@ -1833,7 +1908,8 @@ def _run_agent(sid: str, goal: str, root: Path) -> None:
                approve=lambda action, detail: request_approval(sid, action, detail),
                ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
                web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
-               on_step=lambda st: push(True))
+               on_step=lambda st: push(True),
+               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None)
     agents[ag.run.id] = ag
     socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
     try:
@@ -2017,6 +2093,7 @@ try:
     from setups.profiles import SetupStore, PROFILES, parse_switch, parse_decision
     from setups.router import Router, Unavailable, messages_to_prompt
     from setups.pipeline import Builder
+    from setups.orchestra import Orchestra
     from setups.probe import probe as hw_probe, describe as hw_describe
     from orchestrator.local_model import LocalClient
     SETUPS_OK = True
@@ -2026,6 +2103,7 @@ except Exception as _e:
 
 router = None
 builds: dict = {}
+orchs: dict = {}
 
 
 def _retry(fn, tries: int = 4):
@@ -2061,6 +2139,7 @@ if SETUPS_OK:
 
     router = Router(setup_store, _strong_cloud, _fast_cloud, LocalClient.from_env())
 
+schedule_store = None
 board = privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
@@ -2074,7 +2153,9 @@ if AWARE_OK:
     from awareness.netinfo import NetBoard
     from awareness import programs as _programs
     from vanta_ui.board import Board
+    from agent.schedules import Schedules
     guardian = Guardian(AuditLog(), programs=lambda: _programs.installed())
+    schedule_store = Schedules()
     board = Board(Hardware(), NetBoard(), lambda ev, d, sid: socketio.emit(ev, d, room=sid))
     threading.Thread(target=board.run, name="vanta-board", daemon=True).start()
     guard_settings = GuardSettings()
@@ -2360,6 +2441,7 @@ def start_awareness(port: int) -> None:
             except Exception as exc:
                 print(f"[telemetry] {exc}")
     threading.Thread(target=_telemetry_loop, name="vanta-telemetry", daemon=True).start()
+    threading.Thread(target=_scheduler_loop, name="vanta-schedules", daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

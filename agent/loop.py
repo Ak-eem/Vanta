@@ -14,6 +14,8 @@ import requests
 from utils import sandbox
 from . import memory
 from .checkpoints import Checkpoints
+from .extra import EXTRA_NAMES, Extra
+from . import skills as skillmod
 from .permissions import Denied, check_secret, decide, is_public_url, resolve_inside, split_command
 
 MAX_OUT = 4000
@@ -28,6 +30,16 @@ TOOL_HELP = """Tools (reply with ONE JSON object per turn, nothing else):
 {"tool":"run_command","args":{"command":"python3 -m pytest -q"}}  run ONE simple command in the project (no pipes)
 {"tool":"web_search","args":{"query":"..."}}  look something up
 {"tool":"web_fetch","args":{"url":"https://..."}}  read a web page
+{"tool":"task_create","args":{"subject":"..."}} / {"tool":"task_update","args":{"id":1,"status":"doing|done"}} / {"tool":"task_list","args":{}}  keep your own step list on long jobs
+{"tool":"enter_plan_mode","args":{}} then {"tool":"exit_plan_mode","args":{"plan":"..."}}  think first, get the plan approved, then change things
+{"tool":"code_intel","args":{"action":"outline|definition|references|diagnostics","path":"app.py","symbol":"main"}}  find where things are defined/used, check syntax
+{"tool":"notebook_edit","args":{"path":"a.ipynb","cell":0,"mode":"replace|insert|delete","source":"...","type":"code|markdown"}}
+{"tool":"bg_start","args":{"command":"npm run dev"}} / bg_output / bg_stop  with {"id":"..."}  long-running commands
+{"tool":"enter_worktree","args":{"name":"fix-login"}} / exit_worktree {"keep":true}  work in a separate git copy so the original stays untouched
+{"tool":"schedule_create","args":{"when":"daily 08:00","goal":"..."}} / schedule_list / schedule_delete {"id":"..."}  run a read-only check later or on repeat
+{"tool":"git_status","args":{}} / git_commit {"message":"..."} / git_push {"remote":"origin"} / github_pr {"title":"...","body":"..."}  save and send work to GitHub (asks first; never force-pushes; never commits secrets)
+{"tool":"skill","args":{"name":"..."}}  load a saved how-to (see the skills list below)
+{"tool":"notify","args":{"title":"...","message":"..."}}  tell the person something
 {"tool":"note","args":{"text":"something worth remembering across runs"}}
 {"tool":"subagent","args":{"task":"investigate X and report back briefly"}}  a helper with its own clean context; returns a summary
 {"tool":"ask_user","args":{"question":"..."}}  ask the person when you truly cannot proceed
@@ -85,7 +97,7 @@ class Agent:
     def __init__(self, llm: Callable[[list[dict]], str], root: Path, mode: str = "ask", approve: Callable[[str, str], bool] = lambda a, d: False,
                  ask_user: Callable[[str], str] = lambda q: "", web_search: Optional[Callable[[str], str]] = None, max_steps: int = 30,
                  on_step: Callable[[Step], None] = lambda s: None, ctx_chars: int = 36000, home: Path = memory.HOME,
-                 checkpoint_base: Optional[Path] = None, depth: int = 0, fetch=requests.get, resolver=None) -> None:
+                 checkpoint_base: Optional[Path] = None, depth: int = 0, fetch=requests.get, resolver=None, schedules=None, notify=None) -> None:
         self.llm, self.root, self.mode, self.approve, self.ask_user = llm, Path(root).resolve(), mode, approve, ask_user
         self.web_search, self.max_steps, self.on_step, self.ctx_chars, self.home, self.depth = web_search, max_steps, on_step, ctx_chars, home, depth
         self.fetch = fetch
@@ -95,6 +107,7 @@ class Agent:
         self.cp = Checkpoints(self.run.id, self.root, checkpoint_base or ROOT)
         self.stop = False
         self.compactions = 0
+        self.extra = Extra(self, schedules, notify)
 
     # ── tools ─────────────────────────────────────────────────────────────
     def _tool(self, name: str, a: dict) -> str:
@@ -193,6 +206,8 @@ class Agent:
                         home=self.home, depth=1, fetch=self.fetch, resolver=self.resolver)
             r = sub.execute(str(a.get("task", "")))
             return _clip(f"[helper finished: {r.status}] {r.final}", 2000)
+        if name in EXTRA_NAMES:
+            return _clip(self.extra.call(name, a))
         raise Denied(f"Unknown tool {name}.")
 
     # ── context management ────────────────────────────────────────────────
@@ -224,6 +239,12 @@ class Agent:
 
     # ── the loop ──────────────────────────────────────────────────────────
     def execute(self, goal: str) -> Run:
+        try:
+            return self._execute(goal)
+        finally:
+            self.extra.cleanup()
+
+    def _execute(self, goal: str) -> Run:
         self.run.goal = goal
         notes, instr = memory.load_notes(self.home), memory.load_instructions(self.root, self.home)
         sys_msg = SYSTEM + ("\nThis is a read-only helper: report findings, do not change anything." if self.depth else f"\nPermission mode: {self.mode}.") + "\n\n" + TOOL_HELP
@@ -231,6 +252,8 @@ class Agent:
             sys_msg += "\n\n" + instr
         if notes:
             sys_msg += "\n\n[Notes from earlier runs]\n" + notes
+        if self.extra.skills and not self.depth:
+            sys_msg += "\n\n[Skills you can load with the skill tool when the task matches]\n" + skillmod.index(self.extra.skills)
         msgs: list[dict] = [{"role": "system", "content": sys_msg}, {"role": "user", "content": f"Goal: {goal}\nProject folder: {self.root.name}"}]
         seen: dict[str, int] = {}
         bad_replies = 0
