@@ -4,6 +4,8 @@ import type { Approval, GuardianState, Nudge, PrivacyState, Project, ScanResult,
 import { ProjectsPanel, SafetyPanel, SetupPanel } from './Panels'
 import type { LayoutPref } from '../lib/hudMode'
 import type { Fx } from '../lib/useFx'
+import { hapticsOn, setHaptics, canBuzz, buzz } from '../lib/haptics'
+import { soundOn, setSound, play } from '../lib/sound'
 
 export function NudgeToast({ nudge, onAck }: { nudge: Nudge | null; onAck: (id: string) => void }) {
   useEffect(() => {
@@ -99,9 +101,22 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
           </div>
           <div className="toggle"><div>Light effects<small>{fxAuto ? 'Turned on because this screen was struggling.' : 'Fewer glows and animations. Easier on an older laptop.'}</small></div>
             <button className="switch" role="switch" aria-label="Light effects" aria-checked={fx === 'low'} onClick={() => onFx(fx === 'low' ? 'full' : 'low')} /></div>
+          <FeelToggles />
           <SyncPanel sync={sync} onUnlock={onUnlock} onSyncNow={onSyncNow} />
           <div className="toggle" style={{ marginTop: 12 }}><div>Sign out<small>Locks VANTA in this browser.</small></div><a className="btn sm" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }} href="/logout">Sign out</a></div>
           </> : null}
         </motion.aside>) : null}
     </AnimatePresence>)
+}
+
+/** Phone buzz and sound switches. Same switch style as "Light effects". */
+function FeelToggles() {
+  const [hap, setHap] = useState(hapticsOn())
+  const [snd, setSnd] = useState(soundOn())
+  return (<>
+    <div className="toggle"><div>Short buzz<small>{canBuzz() ? 'A light buzz when you send, get a reply, or need to approve.' : 'This device or browser cannot buzz. Android Chrome can; the app version will work everywhere.'}</small></div>
+      <button className="switch" role="switch" aria-label="Short buzz" aria-checked={hap} onClick={() => { const v = !hap; setHaptics(v); setHap(v); if (v) buzz('tick') }} /></div>
+    <div className="toggle"><div>Sounds<small>Off by default. Soft cues for send, approval and alerts.</small></div>
+      <button className="switch" role="switch" aria-label="Sounds" aria-checked={snd} onClick={() => { const v = !snd; setSound(v); setSnd(v); if (v) void play('tick') }} /></div>
+  </>)
 }

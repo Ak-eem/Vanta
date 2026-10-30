@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { feel } from './feel'
 import { io, Socket } from 'socket.io-client'
 import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState } from '../types'
 import { sanitizeSetup } from './setup'
@@ -146,8 +147,8 @@ export function useVanta() {
     })
     socket.on('status', (d: { state: string; message?: string }) => dispatch({ t: 'status', state: d.state, message: d.message }))
     socket.on('stream_chunk', (d: { chunk: string }) => dispatch({ t: 'chunk', text: d.chunk }))
-    socket.on('stream_done', () => dispatch({ t: 'done' }))
-    socket.on('response', (d: { text: string }) => dispatch({ t: 'say', text: d.text }))
+    socket.on('stream_done', () => { dispatch({ t: 'done' }); feel('reply') })
+    socket.on('response', (d: { text: string }) => { dispatch({ t: 'say', text: d.text }); feel('reply') })
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
@@ -160,10 +161,13 @@ export function useVanta() {
     socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {
       dispatch({ t: 'nudge', v: d })
+      feel(d.severity === 'high' ? 'alert' : 'nudge')
       if (d.severity !== 'low') dispatch({ t: 'concern', ms: 12000 })
     })
-    socket.on('approval_request', (req: { action: string; detail: string }, ack: Approval['ack']) =>
-      dispatch({ t: 'approval', v: { action: req.action, detail: req.detail, ack } }))
+    socket.on('approval_request', (req: { action: string; detail: string }, ack: Approval['ack']) => {
+      dispatch({ t: 'approval', v: { action: req.action, detail: req.detail, ack } })
+      feel('approval')
+    })
     socket.on('stage', (raw: unknown) => {
       const stage = sanitizeStage(raw)
       if (!stage) return
@@ -172,6 +176,7 @@ export function useVanta() {
         dispatch({ t: 'say', text: stage.summary, tag: stage.blocks.some((b) => b.tone === 'warn' || b.tone === 'danger') ? 'heads-up' : undefined, stageId: stage.id, stageLabel: stage.title })
     })
     socket.on('alert', (d: { severity?: string; title: string; message: string }) => {
+      feel(d.severity === 'high' ? 'danger' : 'alert')
       const stage = sanitizeStage({
         id: `alert-${Date.now()}`, title: String(d.title).slice(0, 60), layout: 'single',
         blocks: [
@@ -197,6 +202,7 @@ export function useVanta() {
     const t = text.trim()
     if (!t) return
     dispatch({ t: 'user', text: t })
+    feel('send')
     sock.current?.emit('chat', { message: t, think: false })
   }, [])
   const api = useMemo(() => ({
