@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import type { HwState, SphereState } from '../types'
+import type { FilesState, HwState, SphereState, WeatherState } from '../types'
 import { Sphere, STATE_LABEL } from './Sphere'
-import { disk, headline, heat, mb, rankCards, rate, spark, tone, up, type CardId } from '../lib/hw'
+import { disk, headline, heat, mb, rankCards, rate, size, spark, tone, up, type CardId } from '../lib/hw'
 
 function Ring({ pct, label, sub, big }: { pct: number; label: string; sub?: string; big?: boolean }) {
   const r = 42, c = 2 * Math.PI * r, t = tone(pct)
@@ -21,12 +21,56 @@ function Spark({ values, max, cls }: { values: number[]; max?: number; cls?: str
     <polyline points={`0,34 ${pts} 160,34`} className="fill" /><polyline points={pts} className="line" /></svg>)
 }
 
+const SKY: Record<string, string> = {
+  clear: 'M12 7a5 5 0 100 10 5 5 0 000-10zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1',
+  cloud: 'M7 18a4 4 0 010-8 5.5 5.5 0 0110.6 1.5A3.3 3.3 0 0117 18z',
+  rain: 'M7 14a4 4 0 010-8 5.5 5.5 0 0110.6 1.5A3.3 3.3 0 0117 14zM8 17l-1 3M12 17l-1 3M16 17l-1 3',
+  storm: 'M7 13a4 4 0 010-8 5.5 5.5 0 0110.6 1.5A3.3 3.3 0 0117 13zM12 13l-2 4h3l-2 4',
+  fog: 'M5 9h14M3 13h18M6 17h12', snow: 'M12 2v20M4 7l16 10M20 7L4 17',
+  moon: 'M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z',
+}
+function Sky({ kind, night, big }: { kind: string; night?: boolean; big?: boolean }) {
+  const k = night && kind === 'clear' ? 'moon' : kind
+  return (<svg className={`sky ${k} ${big ? 'big' : ''}`} viewBox="0 0 24 24" aria-hidden="true"><path d={SKY[k] ?? SKY.cloud} /></svg>)
+}
+
+function WeatherCard({ w, rank, onCity }: { w: WeatherState | null; rank: { order: CardId[]; alert: Set<CardId> } | null; onCity: (c: string) => void }) {
+  const [q, setQ] = useState('')
+  return (
+    <Card id="weather" rank={rank} title="WEATHER" aside={w && !w.error ? `${w.city}${w.country ? ', ' + w.country : ''}` : undefined} wide>
+      {!w ? <p className="hint">Looking at the sky…</p> : w.error ? <p className="hint">{w.error}</p> : (<>
+        <div className="wx-now">
+          <Sky kind={w.icon} night={w.night} big />
+          <div><b className="wx-temp">{w.temp}°</b><span>{w.desc} · feels {w.feels}° · {w.humidity}% humid · wind {w.wind} km/h</span>
+            {w.hint ? <em className="wx-hint">{w.hint}</em> : null}</div>
+        </div>
+        <div className="wx-hours" aria-label="Next hours">{w.hours.slice(0, 8).map((h, i) => (
+          <div key={i}><span>{i === 0 ? 'Now' : h.label}</span><Sky kind={h.icon} /><b>{h.temp}°</b>{h.rain >= 30 ? <em>{h.rain}%</em> : <em />}</div>))}</div>
+        <div className="wx-days">{w.days.map((d, i) => (
+          <div key={i}><span>{i === 0 ? 'Today' : d.label}</span><Sky kind={d.icon} /><em>{d.rain >= 30 ? `${d.rain}%` : ''}</em><b>{d.hi}°</b><span className="lo">{d.lo}°</span></div>))}</div>
+      </>)}
+      <form className="wx-city" onSubmit={(e) => { e.preventDefault(); if (q.trim()) { onCity(q.trim()); setQ('') } }}>
+        <input className="search" placeholder="Another city" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Another city" />
+      </form>
+    </Card>)
+}
+
+function FilesCard({ f, rank }: { f: FilesState | null; rank: { order: CardId[]; alert: Set<CardId> } | null }) {
+  return (
+    <Card id="files" rank={rank} title="MY FILES" aside={f ? `${f.files.length}` : undefined}>
+      {!f || !f.files.length ? <p className="hint">Files VANTA makes for you appear here with a download button. They are saved in your VANTA folder{f ? `: ${f.folder}` : ''}.</p> : (
+        <div className="flist">{f.files.slice(0, 8).map((x) => (
+          <div className="frow" key={x.name}><span className="pname">{x.name}</span><span className="pmem">{size(x.size)}</span>
+            <a className="btn sm" href={`/files/${encodeURIComponent(x.name)}`} download>Download</a></div>))}</div>)}
+    </Card>)
+}
+
 function Card({ id, rank, title, aside, children, wide }: { id: CardId; rank: { order: CardId[]; alert: Set<CardId> } | null; title: string; aside?: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
   return (<section className={`bcard ${wide ? 'wide' : ''} ${rank?.alert.has(id) ? 'alert' : ''}`} style={{ order: rank ? rank.order.indexOf(id) : 0 }}><header><span className="k">{title}</span>{aside ? <span className="aside">{aside}</span> : null}</header>{children}</section>)
 }
 
-export function SystemBoard({ hw, focus, sphere, amplitude, low, onEnd, onUninstall, onAsk }: {
-  hw: HwState | null; focus?: CardId | null; sphere: SphereState; amplitude: number; low: boolean
+export function SystemBoard({ hw, weather, files, onCity, focus, sphere, amplitude, low, onEnd, onUninstall, onAsk }: {
+  hw: HwState | null; weather?: WeatherState | null; files?: FilesState | null; onCity?: (c: string) => void; focus?: CardId | null; sphere: SphereState; amplitude: number; low: boolean
   onEnd: (pid: number) => void; onUninstall: (id: string) => void; onAsk: (q: string) => void
 }) {
   const [q, setQ] = useState('')
@@ -57,6 +101,8 @@ export function SystemBoard({ hw, focus, sphere, amplitude, low, onEnd, onUninst
           </Card>) : null}
 
         <div className="bgrid">
+          <WeatherCard w={weather ?? null} rank={rank} onCity={onCity ?? (() => {})} />
+          <FilesCard f={files ?? null} rank={rank} />
           <Card id="cpu" rank={rank} title="PROCESSOR" aside={hw.cpu.freq ? `${(hw.cpu.freq.mhz / 1000).toFixed(1)} GHz` : undefined}>
             <div className="gauge-row">
               <Ring pct={hw.cpu.pct} label="Processor" sub={hw.cpu.temp != null ? `${Math.round(hw.cpu.temp)}°C` : `${hw.cpu.count} cores`} />

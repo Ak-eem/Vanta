@@ -5,7 +5,7 @@ import { computeLayout } from './layout'
 import { BlockBody } from './Blocks'
 import { Sphere, STATE_LABEL } from '../components/Sphere'
 import { SystemBoard } from '../components/SystemBoard'
-import type { HwState } from '../types'
+import type { FilesState, HwState, WeatherState } from '../types'
 import type { CardId } from '../lib/hw'
 
 function useSize(ref: React.RefObject<HTMLElement>) {
@@ -27,10 +27,10 @@ function Shield() {
     <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" /><path d="M12 9v4M12 16v.5" /></svg>)
 }
 
-export function StageView({ stage, history, pinned, sphere, amplitude, low, caption, footer, hw, focus, onEnd, onUninstall, onAsk, onOpen, onPin, onClear, onAction }: {
+export function StageView({ stage, history, pinned, sphere, amplitude, low, caption, footer, hw, weather, files, onCity, focus, onEnd, onUninstall, onAsk, onOpen, onPin, onClear, onAction }: {
   stage: Stage | null; history: Stage[]; pinned: boolean; sphere: SphereState; amplitude: number; low: boolean
   caption?: string; footer?: React.ReactNode
-  hw?: HwState | null; focus?: string | null; onEnd?: (pid: number) => void; onUninstall?: (id: string) => void; onAsk?: (q: string) => void
+  hw?: HwState | null; weather?: WeatherState | null; files?: FilesState | null; onCity?: (c: string) => void; focus?: string | null; onEnd?: (pid: number) => void; onUninstall?: (id: string) => void; onAsk?: (q: string) => void
   onOpen: (id: string) => void; onPin: () => void; onClear: () => void; onAction: (stageId: string, a: StageAction) => void
 }) {
   const view = useRef<HTMLDivElement>(null)
@@ -46,7 +46,7 @@ export function StageView({ stage, history, pinned, sphere, amplitude, low, capt
     return (
       <section className="hud board-mode" aria-label="System board">
         <div className="hud-head"><div className="hud-title"><span className="k">SYSTEM</span><h2>This computer</h2></div></div>
-        <div className="hud-scroll"><SystemBoard hw={hw ?? null} focus={(focus as CardId | null) ?? null} sphere={sphere} amplitude={amplitude} low={low} onEnd={onEnd} onUninstall={onUninstall} onAsk={onAsk} /></div>
+        <div className="hud-scroll"><SystemBoard hw={hw ?? null} weather={weather} files={files} onCity={onCity} focus={(focus as CardId | null) ?? null} sphere={sphere} amplitude={amplitude} low={low} onEnd={onEnd} onUninstall={onUninstall} onAsk={onAsk} /></div>
         {earlier.length > 0 ? (
           <div className="earlier"><span className="k">EARLIER</span>
             {earlier.map((e) => <button key={e.id} onClick={() => onOpen(e.id)}>{e.title} · {fmt(e.ts)}</button>)}</div>) : null}

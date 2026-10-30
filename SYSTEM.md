@@ -21,3 +21,9 @@ Settings > Dashboard and chat: **Chat drawer** (dashboard stays on screen, chat 
 ## VANTA chooses what to show
 Cards that need attention (full memory, a hot processor, nearly full drive, firewall off, risky open port, a runaway program) rise to the top and glow amber without you asking.
 Say "show my network" (or memory, drives, heat, programs, security, installed) to bring a card to the front.
+
+## Weather
+A Weather card (now, next 8 hours, 5 days, "Rain likely around 3 PM") from Open-Meteo: free, no key, no account. Default city is `VANTA_DEFAULT_CITY` (Lagos). Say "weather in Ikeja" or type a city in the card. Cached 20 minutes. If an `OPENWEATHER_API_KEY` is set it is still used for the chat one-liner. Offline mode never looks anything up. If it fails the card says so instead of showing made-up numbers.
+
+## My files (download button)
+Files VANTA makes (`save_file`, `send_file` agent tools) go into one folder, `~/Documents/VANTA` (change with `VANTA_FILES`), and show on the dashboard with a Download button. It never overwrites, never writes outside that folder, never hands out secret files, and the download link needs your login.

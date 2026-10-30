@@ -22,9 +22,10 @@ export function headline(findings: { level: string }[]): { text: string; tone: '
   return { text: 'All calm', tone: 'ok' }
 }
 
-export type CardId = 'cpu' | 'mem' | 'disks' | 'heat' | 'programs' | 'network' | 'security' | 'installed'
-export const CARD_ORDER: CardId[] = ['cpu', 'mem', 'disks', 'heat', 'programs', 'network', 'security', 'installed']
+export type CardId = 'weather' | 'files' | 'cpu' | 'mem' | 'disks' | 'heat' | 'programs' | 'network' | 'security' | 'installed'
+export const CARD_ORDER: CardId[] = ['weather', 'files', 'cpu', 'mem', 'disks', 'heat', 'programs', 'network', 'security', 'installed']
 export const CARD_WORDS: Record<CardId, RegExp> = {
+  weather: /^(weather|forecast)$/, files: /^(files?|downloads?)$/,
   cpu: /^(processor|cpu)$/, mem: /^(memory|ram)$/, disks: /^(drives?|disks?|storage)$/, heat: /^(heat|temperatures?|fans?|temp)$/,
   programs: /^(programs?|apps?|processes)$/, network: /^(network|internet|wifi|connections?)$/, security: /^(security|firewall|antivirus)$/, installed: /^(installed|installed programs)$/,
 }
@@ -34,7 +35,7 @@ interface RankIn {
 }
 /** VANTA decides what matters: cards that need attention rise to the top and glow. `focus` is a card you asked for ("show my network"). */
 export function rankCards(hw: RankIn, focus?: CardId | null): { order: CardId[]; alert: Set<CardId> } {
-  const score: Record<CardId, number> = { cpu: 0, mem: 0, disks: 0, heat: 0, programs: 0, network: 0, security: 0, installed: 0 }
+  const score: Record<CardId, number> = { weather: 0, files: 0, cpu: 0, mem: 0, disks: 0, heat: 0, programs: 0, network: 0, security: 0, installed: 0 }
   score.cpu = hw.cpu.pct >= 90 ? 80 : hw.cpu.pct >= 70 ? 40 : 0
   score.mem = hw.mem.pct >= 90 ? 90 : hw.mem.pct >= 80 ? 50 : 0
   score.disks = Math.max(0, ...hw.disks.map((d) => (d.pct >= 95 ? 85 : d.pct >= 88 ? 55 : 0)))
@@ -49,3 +50,5 @@ export function rankCards(hw: RankIn, focus?: CardId | null): { order: CardId[];
   if (focus) { order.splice(order.indexOf(focus), 1); order.unshift(focus) }
   return { order, alert }
 }
+
+export const size = (b: number) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`)

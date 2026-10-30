@@ -494,11 +494,14 @@ def _extract_city(msg: str) -> str | None:
     return None
 
 def get_weather(msg: str) -> str:
-    if not WEATHER_API_KEY or _offline():
+    if _offline():
         return ""
     city = _extract_city(msg)
     if not city:
         return ""
+    if not WEATHER_API_KEY:                      # no OpenWeather key: use the free Open-Meteo service
+        w = weather_cache.get(city)
+        return _weather_sentence(w) if w else ""
     try:
         url = ("https://api.openweathermap.org/data/2.5/weather?"
                + _urlparse.urlencode({"q": city, "appid": WEATHER_API_KEY, "units": "metric"}))
@@ -517,6 +520,12 @@ def get_weather(msg: str) -> str:
         return ""
 
 DEFAULT_CITY = os.environ.get("VANTA_DEFAULT_CITY", "Lagos")
+from utils.weather import WeatherCache
+weather_cache = WeatherCache()
+
+
+def _weather_sentence(w: dict) -> str:
+    return f"Current weather in {w['city']}: {w['temp']}°C (feels like {w['feels']}°C), {w['desc'].lower()}, {w['humidity']}% humidity." + (f" {w['hint']}" if w.get("hint") else "")
 
 def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
     if _offline():
@@ -527,7 +536,8 @@ def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
     None on any failure so the frontend can show 'unavailable' honestly
     rather than display stale fake numbers."""
     if not WEATHER_API_KEY:
-        return None
+        w = weather_cache.get(city)
+        return {"temp": w["temp"], "condition": w["desc"].upper(), "city": w["city"]} if w else None
     try:
         url = ("https://api.openweathermap.org/data/2.5/weather?"
                + _urlparse.urlencode({"q": city, "appid": WEATHER_API_KEY, "units": "metric"}))
@@ -1086,11 +1096,7 @@ def on_connect():
     emit("status",    {"state": "idle"})
     emit("workspace", {"path": WORKSPACE})
     sid = request.sid
-    def _send_weather():
-        card = get_weather_card()
-        if card:
-            socketio.emit("weather_card", card, room=sid)
-    socketio.start_background_task(_send_weather)
+    # The dashboard's Weather card (weather_state) replaces the old pop-up stage that used to appear on connect.
     _emit_setup_state(sid)
 
 @socketio.on("disconnect")
@@ -1444,6 +1450,11 @@ def _system_command(sid: str, msg: str) -> bool:
     if not cmd:
         return False
     kind, target = cmd
+    if kind == "weather":
+        socketio.emit("hw_focus", {"card": "weather"}, room=sid)
+        if target:
+            on_weather_get_for(sid, target)
+        return True
     if kind == "focus":
         socketio.emit("hw_focus", {"card": target}, room=sid)
         socketio.emit("response", {"text": "Here it is on the dashboard."}, room=sid)
@@ -1509,6 +1520,49 @@ def _uninstall_program(sid: str, prog_id: str) -> None:
     except Refused as exc:
         socketio.emit("response", {"text": f"I couldn't uninstall {name}: {exc}"}, room=sid)
     _emit_guardian_state()
+
+
+@socketio.on("weather_get")
+def on_weather_get(data):
+    if _offline():
+        emit("weather_state", {"error": "Offline mode is on, so I didn't look up the weather."})
+        return
+    city = str((data or {}).get("city") or DEFAULT_CITY).strip()[:60] or DEFAULT_CITY
+    sid = request.sid
+
+    def work():
+        w = weather_cache.get(city)
+        socketio.emit("weather_state", w or {"error": f"I couldn't get the weather for {city}."}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def on_weather_get_for(sid: str, city: str) -> None:
+    def work():
+        w = weather_cache.get(city)
+        socketio.emit("weather_state", w or {"error": f"I couldn't get the weather for {city}."}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _files_state():
+    from utils import vanta_files
+    return {"folder": str(vanta_files.folder()), "files": vanta_files.listing()}
+
+
+@socketio.on("files_get")
+def on_files_get():
+    emit("files_state", _files_state())
+
+
+@app.route("/files/<path:name>")
+def download_file(name):
+    from flask import send_from_directory
+    from utils import vanta_files
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    p = vanta_files.resolve(name)
+    if not p:
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(p.parent, p.name, as_attachment=True)
 
 
 @socketio.on("hw_watch")
@@ -1909,7 +1963,8 @@ def _run_agent(sid: str, goal: str, root: Path) -> None:
                ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
                web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
                on_step=lambda st: push(True),
-               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None)
+               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None,
+               on_file=lambda n: socketio.emit("files_state", _files_state(), room=sid))
     agents[ag.run.id] = ag
     socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
     try:

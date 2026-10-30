@@ -15,6 +15,7 @@ from . import skills as skillmod
 from .permissions import Denied, check_secret, resolve_inside, split_command
 from .schedules import Schedules
 from . import gittools
+from utils import vanta_files
 
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".cs", ".php", ".rb"}
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", "target"}
@@ -28,8 +29,8 @@ def _clip(s: str, n: int = 3000) -> str:
 class Extra:
     """Holds state that lives for one agent run. `ag` is the Agent it belongs to."""
 
-    def __init__(self, ag, schedules: Schedules | None = None, notify=None, bg_dir: Path | None = None) -> None:
-        self.ag, self.schedules, self.notify = ag, schedules, notify
+    def __init__(self, ag, schedules: Schedules | None = None, notify=None, bg_dir: Path | None = None, on_file=None, files_dir: Path | None = None) -> None:
+        self.ag, self.schedules, self.notify, self.on_file, self.files_dir = ag, schedules, notify, on_file, files_dir
         self.tasks: list[dict] = []
         self.prev_mode: str | None = None
         self.bg: dict[str, dict] = {}
@@ -296,6 +297,33 @@ class Extra:
         self.notify(str(a.get("title", "VANTA"))[:80], str(a.get("message", ""))[:300])
         return "Sent."
 
+    # ── files for you (the VANTA folder) ─────────────────────────────────
+    def save_file(self, a):
+        name, content = str(a.get("name", "")), str(a.get("content", ""))
+        if not name:
+            return "A file needs a name."
+        try:
+            p = vanta_files.save_bytes(name, content.encode("utf-8"), self.files_dir)
+        except ValueError as e:
+            return str(e)
+        self._file_made(p)
+        return f"Saved {p.name} in your VANTA folder. You can download it from the dashboard."
+
+    def send_file(self, a):
+        src = resolve_inside(self.ag.root, str(a.get("path", "")))
+        check_secret(src)
+        if not src.is_file():
+            return "No such file."
+        if src.stat().st_size > vanta_files.MAX_BYTES:
+            return "That file is too big (50 MB limit)."
+        p = vanta_files.save_bytes(str(a.get("name") or src.name), src.read_bytes(), self.files_dir)
+        self._file_made(p)
+        return f"Copied {src.name} to your VANTA folder as {p.name}."
+
+    def _file_made(self, p: Path) -> None:
+        if self.on_file:
+            self.on_file(p.name)
+
     def call(self, name: str, a: dict) -> str:
         if name in ("git_status", "git_commit", "git_push", "github_pr"):
             return getattr(gittools, name)(self.ag, a)
@@ -303,4 +331,4 @@ class Extra:
 
 
 EXTRA_NAMES = {"task_create", "task_update", "task_list", "enter_plan_mode", "exit_plan_mode", "notebook_edit", "code_intel", "bg_start", "bg_output", "bg_stop",
-               "enter_worktree", "exit_worktree", "schedule_create", "schedule_list", "schedule_delete", "skill", "notify", "git_status", "git_commit", "git_push", "github_pr"}
+               "enter_worktree", "exit_worktree", "schedule_create", "schedule_list", "schedule_delete", "skill", "notify", "git_status", "git_commit", "git_push", "github_pr", "save_file", "send_file"}

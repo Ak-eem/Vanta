@@ -49,6 +49,7 @@ export default function App() {
   useEffect(() => { if (stage && tab !== 'stage') setUnseen(true) }, [stage?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'stage') setUnseen(false) }, [tab])
 
+  useEffect(() => { const id = window.setInterval(() => { if (!document.hidden) { api.getWeather(); api.getFiles() } }, 120000); return () => window.clearInterval(id) }, [api])
   useEffect(() => { if (state.messages.length) openRail() }, [state.messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!railOpen) return
@@ -95,7 +96,7 @@ export default function App() {
 
       <div style={{ gridArea: phone ? 'main' : 'stage', display: paged && tab !== 'stage' ? 'none' : 'flex', minHeight: 0, minWidth: 0 }}>
         <StageView stage={stage} history={state.stages} pinned={state.pinned} sphere={sphere} amplitude={sphere === 'speaking' ? 0.5 : 0} low={fx === 'low'}
-          hw={state.hw} focus={state.focus} onEnd={api.hwEnd} onUninstall={api.hwUninstall} onAsk={(q) => { api.send(q); setTab('chat') }}
+          hw={state.hw} weather={state.weather} files={state.files} onCity={api.getWeather} focus={state.focus} onEnd={api.hwEnd} onUninstall={api.hwUninstall} onAsk={(q) => { api.send(q); setTab('chat') }}
           caption={hud && state.tel?.app ? `Watching with you: ${state.tel.app}` : undefined}
           footer={hud && !phone ? <Readouts tel={state.tel} /> : null} onOpen={api.openStage} onPin={api.pinStage} onClear={api.clearStage} onAction={onAction} />
       </div>

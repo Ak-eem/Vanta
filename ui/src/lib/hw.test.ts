@@ -24,7 +24,7 @@ describe('hw helpers', () => {
   })
   it('ranks cards that need attention first, and honours a focus request', () => {
     const calm = { cpu: { pct: 10, temp: null }, mem: { pct: 30 }, disks: [{ pct: 40 }], programs: [], thermal: { temps: [] }, network: { security: [{ state: 'on' }], listening: [], connected: [] } }
-    expect(rankCards(calm).order[0]).toBe('cpu'); expect(rankCards(calm).alert.size).toBe(0)
+    expect(rankCards(calm).order[0]).toBe('weather'); expect(rankCards(calm).alert.size).toBe(0)
     const bad = { ...calm, mem: { pct: 95 }, network: { ...calm.network, security: [{ state: 'off' }] } }
     const r = rankCards(bad)
     expect(r.order.slice(0, 2)).toEqual(['security', 'mem']); expect(r.alert.has('mem')).toBe(true)

@@ -81,3 +81,11 @@ export interface HwState {
     limited?: boolean
   }
 }
+
+export interface WeatherState {
+  city: string; country: string; temp: number; feels: number; humidity: number; wind: number; desc: string; icon: string; night: boolean; hint: string
+  hours: { label: string; temp: number; rain: number; icon: string }[]
+  days: { label: string; hi: number; lo: number; rain: number; icon: string; desc: string }[]
+  error?: string
+}
+export interface FilesState { folder: string; files: { name: string; size: number; ts: number }[] }

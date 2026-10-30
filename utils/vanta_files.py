@@ -34,6 +34,7 @@ def save_bytes(name: str, data: bytes, base: Path | None = None) -> Path:
     if len(data) > MAX_BYTES:
         raise ValueError("That file is too big (50 MB limit).")
     base = base or folder()
+    base.mkdir(parents=True, exist_ok=True)
     p = unique(base, name)
     p.write_bytes(data)
     return p

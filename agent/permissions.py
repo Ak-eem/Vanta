@@ -77,6 +77,10 @@ def decide(mode: str, tool: str, args: dict) -> str:
         return "allow"
     if mode == "plan":
         raise Denied("I'm in plan mode, so I can look but not change anything. Switch modes to let me make changes.")
+    if tool in ("save_file", "send_file"):          # writes only into the VANTA folder and never overwrites, so no pop-up; not in plan mode
+        if mode == "plan":
+            raise Denied("I'm in plan mode, so I can look but not make files.")
+        return "allow"
     if tool in ASK_TOOLS:
         return "ask"
     if tool in EDIT_TOOLS:

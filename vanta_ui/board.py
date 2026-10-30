@@ -21,8 +21,14 @@ CARD_OF = {"processor": "cpu", "cpu": "cpu", "memory": "mem", "ram": "mem", "dri
            "security": "security", "firewall": "security", "antivirus": "security", "installed": "installed", "installed programs": "installed"}
 
 
+WEATHER_RE = re.compile(r"^\s*(?:please\s+)?(?:show|open|pin|bring up|check)?\s*(?:me\s+)?(?:the\s+|my\s+)?(?:weather|forecast)(?:\s+(?:card|panel))?(?:\s+(?:in|for|at)\s+([A-Za-z][A-Za-z .'-]{1,40}?))?(?:\s+(?:today|now|please))?\s*[.!?]*\s*$", re.I)
+
+
 def parse(msg: str) -> Optional[tuple[str, str]]:
     """('status'|'end'|'uninstall', target). Only a hint: the caller still checks that a real program matches."""
+    m = WEATHER_RE.match(msg)
+    if m:
+        return "weather", (m.group(1) or "").strip()
     m = FOCUS_RE.match(msg)
     if m:
         return "focus", CARD_OF[m.group(1).lower()]

@@ -38,6 +38,7 @@ TOOL_HELP = """Tools (reply with ONE JSON object per turn, nothing else):
 {"tool":"enter_worktree","args":{"name":"fix-login"}} / exit_worktree {"keep":true}  work in a separate git copy so the original stays untouched
 {"tool":"schedule_create","args":{"when":"daily 08:00","goal":"..."}} / schedule_list / schedule_delete {"id":"..."}  run a read-only check later or on repeat
 {"tool":"git_status","args":{}} / git_commit {"message":"..."} / git_push {"remote":"origin"} / github_pr {"title":"...","body":"..."}  save and send work to GitHub (asks first; never force-pushes; never commits secrets)
+{"tool":"save_file","args":{"name":"report.md","content":"..."}} / send_file {"path":"out/site.zip"}  put a file in the person's VANTA folder so they can download it (never overwrites)
 {"tool":"skill","args":{"name":"..."}}  load a saved how-to (see the skills list below)
 {"tool":"notify","args":{"title":"...","message":"..."}}  tell the person something
 {"tool":"note","args":{"text":"something worth remembering across runs"}}
@@ -97,7 +98,7 @@ class Agent:
     def __init__(self, llm: Callable[[list[dict]], str], root: Path, mode: str = "ask", approve: Callable[[str, str], bool] = lambda a, d: False,
                  ask_user: Callable[[str], str] = lambda q: "", web_search: Optional[Callable[[str], str]] = None, max_steps: int = 30,
                  on_step: Callable[[Step], None] = lambda s: None, ctx_chars: int = 36000, home: Path = memory.HOME,
-                 checkpoint_base: Optional[Path] = None, depth: int = 0, fetch=requests.get, resolver=None, schedules=None, notify=None) -> None:
+                 checkpoint_base: Optional[Path] = None, depth: int = 0, fetch=requests.get, resolver=None, schedules=None, notify=None, on_file=None, files_dir=None) -> None:
         self.llm, self.root, self.mode, self.approve, self.ask_user = llm, Path(root).resolve(), mode, approve, ask_user
         self.web_search, self.max_steps, self.on_step, self.ctx_chars, self.home, self.depth = web_search, max_steps, on_step, ctx_chars, home, depth
         self.fetch = fetch
@@ -107,7 +108,7 @@ class Agent:
         self.cp = Checkpoints(self.run.id, self.root, checkpoint_base or ROOT)
         self.stop = False
         self.compactions = 0
-        self.extra = Extra(self, schedules, notify)
+        self.extra = Extra(self, schedules, notify, on_file=on_file, files_dir=files_dir)
 
     # ── tools ─────────────────────────────────────────────────────────────
     def _tool(self, name: str, a: dict) -> str:
