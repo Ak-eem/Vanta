@@ -1,15 +1,14 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import type { SphereState, Stage, StageAction } from '../types'
+import type { Stage, StageAction } from '../types'
 import { BlockBody } from '../stage/Blocks'
-import { Sphere } from './Sphere'
 
 const SPAN: Record<string, string> = { text: 'w2', bars: 'w2', steps: 'w2', source: 'w1', stat: 'w1', image: 'w2', table: 'w2', code: 'w2' }
 const RANK: Record<string, number> = { text: 0, stat: 1, bars: 2, steps: 0, source: 3 }
 
 /** A research report as a mosaic of panels. While the agent works there is a small progress card and the orb sits in the corner. */
-export function ReportView({ stage, sphere, amplitude, low, onClear, onAction, history, onOpen }: {
-  stage: Stage; sphere: SphereState; amplitude: number; low: boolean; onClear: () => void; onAction: (id: string, a: StageAction) => void
+export function ReportView({ stage, onClear, onAction, history, onOpen }: {
+  stage: Stage; onClear: () => void; onAction: (id: string, a: StageAction) => void
   history: Stage[]; onOpen: (id: string) => void
 }) {
   const [tidy, setTidy] = useState(false)
@@ -37,7 +36,6 @@ export function ReportView({ stage, sphere, amplitude, low, onClear, onAction, h
             </motion.div>))}
         </div>
       </div>
-      <div className={`orb-corner ${working ? 'busy' : ''}`}><Sphere state={working ? 'thinking' : sphere} amplitude={amplitude} spot={{ cx: 48, cy: 48, size: 96 }} low={low} /></div>
       {history.length > 0 ? (
         <div className="earlier"><span className="k">HISTORY</span>
           {history.map((e) => <button key={e.id} onClick={() => onOpen(e.id)}>{e.title}</button>)}</div>) : null}

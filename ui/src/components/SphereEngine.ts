@@ -11,6 +11,7 @@ export const LOOKS: Record<SphereState, Look> = {
   idle:     { rot: 0.10, breathAmp: 0.020, breathFreq: 0.8, wobble: 0.010, bright: 1.0,  inward: 0,    pulse: 0,   color: c('#7EC8FF'), glow: c('#2596FF'), spread: 1 },
   thinking: { rot: 0.45, breathAmp: 0.030, breathFreq: 2.2, wobble: 0.030, bright: 1.25, inward: 0,    pulse: 0,   color: c('#9AD6FF'), glow: c('#2596FF'), spread: 1 },
   speaking: { rot: 0.18, breathAmp: 0.040, breathFreq: 3.0, wobble: 0.020, bright: 1.15, inward: 0,    pulse: 0,   color: c('#7EC8FF'), glow: c('#2596FF'), spread: 1 },
+  listening:{ rot: 0.14, breathAmp: 0.045, breathFreq: 1.2, wobble: 0.018, bright: 1.2,  inward: 0.05, pulse: 0,   color: c('#8FE3FF'), glow: c('#2596FF'), spread: 1.02 },
   learning: { rot: 0.22, breathAmp: 0.025, breathFreq: 1.4, wobble: 0.015, bright: 1.1,  inward: 0.16, pulse: 0,   color: c('#A6EBFF'), glow: c('#2FB6FF'), spread: 1 },
   sleeping: { rot: 0.03, breathAmp: 0.015, breathFreq: 0.35, wobble: 0.004, bright: 0.32, inward: 0,   pulse: 0,   color: c('#5F8FB8'), glow: c('#1B4F86'), spread: 0.92 },
   // Error and alert read as concern, not malfunction: warm, slow, never flashing.
@@ -64,6 +65,14 @@ function shell(count: number, radius: number, jitter: number): THREE.BufferGeome
   return g
 }
 
+/** On a light background the points are drawn solid and dark, so the orb stays readable in bright rooms. */
+const LIGHT: Record<SphereState, { color: THREE.Color; glow: THREE.Color }> = {
+  idle: { color: c('#0B5FD6'), glow: c('#0A2F7A') }, thinking: { color: c('#1D6FEA'), glow: c('#0A2F7A') },
+  speaking: { color: c('#0B5FD6'), glow: c('#062766') }, listening: { color: c('#0E7490'), glow: c('#0A3F5C') },
+  learning: { color: c('#0891B2'), glow: c('#0B4F6C') }, sleeping: { color: c('#6B7C95'), glow: c('#44546B') },
+  error: { color: c('#C62839'), glow: c('#7A1220') }, alert: { color: c('#B45F06'), glow: c('#6B3500') },
+}
+
 export class SphereEngine {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -79,6 +88,7 @@ export class SphereEngine {
   private t = 0
   private reduced = false
   private running = false
+  private light = false
 
   constructor(private canvas: HTMLCanvasElement, low = false) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' })
@@ -104,6 +114,10 @@ export class SphereEngine {
   }
 
   setState(s: SphereState) { this.target = s }
+  setLight(on: boolean) {
+    this.light = on
+    for (const m of this.mats) { m.blending = on ? THREE.NormalBlending : THREE.AdditiveBlending; m.needsUpdate = true }
+  }
   /** 0..1 loudness while speaking (voice mode) */
   setAmplitude(a: number) { this.ampTarget = Math.max(0, Math.min(1, a)) }
 
@@ -121,7 +135,8 @@ export class SphereEngine {
     c.rot += (L.rot - c.rot) * k; c.breathAmp += (L.breathAmp - c.breathAmp) * k; c.breathFreq += (L.breathFreq - c.breathFreq) * k
     c.wobble += (L.wobble - c.wobble) * k; c.bright += (L.bright - c.bright) * k; c.inward += (L.inward - c.inward) * k
     c.pulse += (L.pulse - c.pulse) * k; c.spread += (L.spread - c.spread) * k
-    c.color.lerp(L.color, k); c.glow.lerp(L.glow, k)
+    const pal = this.light ? LIGHT[this.target] : L
+    c.color.lerp(pal.color, k); c.glow.lerp(pal.glow, k)
     this.amp += (this.ampTarget - this.amp) * (1 - Math.exp(-dt * 12))
   }
 

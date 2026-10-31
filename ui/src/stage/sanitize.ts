@@ -28,7 +28,7 @@ export function sanitizeStage(raw: unknown): Stage | null {
     }
     if (rb.type === 'bars') data.points = (Array.isArray(data.points) ? data.points : []).slice(0, 8).filter((p: unknown) => isObj(p) && Number.isFinite(Number(p.value)))
     blocks.push({
-      id, type: rb.type as BlockType, title: rb.title ? str(rb.title, 120) : undefined,
+      id, type: rb.type as BlockType, title: rb.title ? str(rb.title, 120) : undefined, size: (['s', 'm', 'l', 'full'] as const).find((x) => x === rb.size),
       tone: TONES.includes(rb.tone as string) ? (rb.tone as Block['tone']) : 'normal', data,
     })
   }

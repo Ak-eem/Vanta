@@ -69,7 +69,8 @@ function Card({ id, rank, title, aside, children, wide }: { id: CardId; rank: { 
   return (<section className={`bcard ${wide ? 'wide' : ''} ${rank?.alert.has(id) ? 'alert' : ''}`} style={{ order: rank ? rank.order.indexOf(id) : 0 }}><header><span className="k">{title}</span>{aside ? <span className="aside">{aside}</span> : null}</header>{children}</section>)
 }
 
-export function SystemBoard({ hw, weather, files, onCity, focus, sphere, amplitude, low, onEnd, onUninstall, onAsk }: {
+export function SystemBoard({ hw, weather, files, onCity, focus, sphere, amplitude, low, onEnd, onUninstall, onAsk, orb = true }: {
+  orb?: boolean
   hw: HwState | null; weather?: WeatherState | null; files?: FilesState | null; onCity?: (c: string) => void; focus?: CardId | null; sphere: SphereState; amplitude: number; low: boolean
   onEnd: (pid: number) => void; onUninstall: (id: string) => void; onAsk: (q: string) => void
 }) {
@@ -82,7 +83,7 @@ export function SystemBoard({ hw, weather, files, onCity, focus, sphere, amplitu
   return (
     <div className="board">
       <div className="board-hero">
-        <div className="hero-sphere"><Sphere state={sphere} amplitude={amplitude} spot={{ cx: 70, cy: 70, size: 132 }} low={low} /></div>
+        {orb ? <div className="hero-sphere"><Sphere state={sphere} amplitude={amplitude} spot={{ cx: 70, cy: 70, size: 132 }} low={low} /></div> : null}
         <div className="hero-text">
           <span className="k">{STATE_LABEL[sphere]}</span>
           <h3 className={head?.tone ?? ''}>{head ? head.text : 'Reading your computer…'}</h3>

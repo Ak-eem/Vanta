@@ -2,7 +2,6 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import type { Approval, GuardianState, Nudge, PrivacyState, Project, ScanResult, SetupState, SyncState } from '../types'
 import { ProjectsPanel, SafetyPanel, SetupPanel } from './Panels'
-import type { LayoutPref, ViewPref } from '../lib/hudMode'
 import type { Fx } from '../lib/useFx'
 
 export function NudgeToast({ nudge, onAck }: { nudge: Nudge | null; onAck: (id: string) => void }) {
@@ -40,7 +39,6 @@ const SOURCES: { key: string; label: string; hint: string }[] = [
   { key: 'screen', label: 'Screen changes', hint: 'Notices when the screen changes. Pixels are never saved.' },
 ]
 
-const LOOKS: { v: LayoutPref; label: string }[] = [{ v: 'auto', label: 'Auto' }, { v: 'calm', label: 'Calm' }, { v: 'hud', label: 'HUD' }]
 
 function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void }) {
   const [pw, setPw] = useState('')
@@ -56,11 +54,11 @@ function SyncPanel({ sync, onUnlock, onSyncNow }: { sync: SyncState | null; onUn
         <input type="password" aria-label="Vault passphrase" placeholder="Vault passphrase" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && pw) { onUnlock(pw); setPw('') } }} />
         <button className="btn sm primary" disabled={pw.length < 8} onClick={() => { onUnlock(pw); setPw('') }}>Unlock</button>
       </div></>)}
-    {sync.error ? <p style={{ color: '#E7A3AB' }}>{sync.error}</p> : null}
+    {sync.error ? <p style={{ color: 'var(--err)' }}>{sync.error}</p> : null}
   </>)
 }
 
-export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLayout, view, onView, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode, scans, onScan, onEmergency, onPurge, onCheckProject, onAgentMode, setup, onSetup, onBuilderFast }: {
+export function SettingsDrawer({ open, privacy, onSource, onClose, fx, fxAuto, onFx, sync, onUnlock, onSyncNow, projects, guardian, onSaveProject, onRemoveProject, onRestore, onOpenPanels, onGuardMode, scans, onScan, onEmergency, onPurge, onCheckProject, onAgentMode, setup, onSetup, onBuilderFast }: {
   setup: SetupState | null; onSetup: (id: string) => void; onBuilderFast: (w: 'cloud' | 'local') => void
   onAgentMode: (m: string) => void
   onCheckProject: (id: string) => void
@@ -70,7 +68,7 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
   projects: Project[]; guardian: GuardianState | null; onSaveProject: (p: Partial<Project>) => void; onRemoveProject: (id: string) => void; onRestore: (id: string) => void; onOpenPanels: () => void
   sync: SyncState | null; onUnlock: (pw: string) => void; onSyncNow: () => void
   open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void
-  layout: LayoutPref; onLayout: (v: LayoutPref) => void; view: ViewPref; onView: (v: ViewPref) => void; fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
+  fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
 }) {
   const [tab, setTab] = useState<'privacy' | 'projects' | 'safety'>('privacy')
   useEffect(() => { if (open) onOpenPanels() }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,17 +90,7 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, layout, onLay
               <div>{s.label}<small>{s.hint}</small></div>
               <button className="switch" role="switch" aria-label={s.label} aria-checked={!!privacy.sources[s.key]} onClick={() => onSource(s.key, !privacy.sources[s.key])} />
             </div>))}
-          <h3 style={{ marginTop: 22 }}>How it looks</h3>
-          <p>Auto keeps things calm while we chat and switches to the full HUD when there is something to show or I am working.</p>
-          <div className="seg" role="radiogroup" aria-label="Layout">
-            {LOOKS.map((l) => <button key={l.v} role="radio" aria-checked={layout === l.v} onClick={() => onLayout(l.v)}>{l.label}</button>)}
-          </div>
-          <h3 style={{ marginTop: 22 }}>Dashboard and chat</h3>
-          <p>Chat drawer keeps the dashboard on screen and slides the chat over it. Separate pages gives each its own full screen.</p>
-          <div className="seg" role="radiogroup" aria-label="Dashboard and chat">
-            <button role="radio" aria-checked={view === 'drawer'} onClick={() => onView('drawer')}>Chat drawer</button>
-            <button role="radio" aria-checked={view === 'pages'} onClick={() => onView('pages')}>Separate pages</button>
-          </div>
+          <h3 style={{ marginTop: 22 }}>Effects</h3>
           <div className="toggle"><div>Light effects<small>{fxAuto ? 'Turned on because this screen was struggling.' : 'Fewer glows and animations. Easier on an older laptop.'}</small></div>
             <button className="switch" role="switch" aria-label="Light effects" aria-checked={fx === 'low'} onClick={() => onFx(fx === 'low' ? 'full' : 'low')} /></div>
           <SyncPanel sync={sync} onUnlock={onUnlock} onSyncNow={onSyncNow} />

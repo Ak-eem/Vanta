@@ -1,4 +1,4 @@
-export type SphereState = 'idle' | 'thinking' | 'speaking' | 'learning' | 'sleeping' | 'error' | 'alert'
+export type SphereState = 'idle' | 'thinking' | 'speaking' | 'listening' | 'learning' | 'sleeping' | 'error' | 'alert'
 /** orbit = unrelated items float around the sphere; connected = related items linked with lines.
  *  single/compact/investigation are older names, still accepted. */
 export type LayoutMode = 'orbit' | 'connected' | 'single' | 'compact' | 'investigation' | 'report'
@@ -11,6 +11,8 @@ export interface Block {
   id: string
   type: BlockType
   title?: string
+  /** How much room VANTA wants on the table. The layout engine decides the exact place. */
+  size?: 's' | 'm' | 'l' | 'full'
   tone?: Tone
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: Record<string, any>

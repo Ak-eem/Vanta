@@ -8,7 +8,7 @@ const CANVAS = 340
 
 /** React mounts the canvas and forwards state; every frame runs inside SphereEngine, outside React.
  *  Moving/resizing is a CSS transform, so the sphere glides between layouts without re-rendering WebGL. */
-export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState; amplitude?: number; spot: SphereSpot; low: boolean }) {
+export function Sphere({ state, amplitude = 0, spot, low, light = false }: { state: SphereState; amplitude?: number; spot: SphereSpot; low: boolean; light?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const engine = useRef<SphereEngine | null>(null)
   const [noGl, setNoGl] = useState(false)   // the soft gradient is only a stand-in when WebGL can't start
@@ -20,7 +20,7 @@ export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState
     try { eng = new SphereEngine(el, low || (navigator.hardwareConcurrency ?? 4) <= 4) } catch { setNoGl(true); return }
     engine.current = eng
     eng.resize(CANVAS, CANVAS)
-    eng.setState(state)
+    eng.setState(state); eng.setLight(light)
     eng.start()
     const onVis = () => (document.hidden ? eng.stop() : eng.start())
     document.addEventListener('visibilitychange', onVis)
@@ -29,6 +29,7 @@ export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState
   }, [low])
 
   useEffect(() => { engine.current?.setState(state) }, [state])
+  useEffect(() => { engine.current?.setLight(light) }, [light])
   useEffect(() => { engine.current?.setAmplitude(amplitude) }, [amplitude])
 
   const scale = spot.size / BOX
@@ -50,6 +51,6 @@ export function Sphere({ state, amplitude = 0, spot, low }: { state: SphereState
 }
 
 export const STATE_LABEL: Record<SphereState, string> = {
-  idle: 'Here', thinking: 'Thinking', speaking: 'Speaking', learning: 'Learning',
+  idle: 'Here', thinking: 'Thinking', speaking: 'Speaking', listening: 'Listening', learning: 'Learning',
   sleeping: 'Resting', error: 'Something went wrong', alert: 'Concerned · watching',
 }

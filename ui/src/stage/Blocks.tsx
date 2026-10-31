@@ -33,7 +33,7 @@ function Chart({ b }: { b: Block }) {
   return (<><Head kind="chart" title={b.title} right={b.data.note ? <span style={{ font: '10px var(--mono)', color: 'var(--muted)' }}>{str(b.data.note)}</span> : null} />
     <div className="block-body" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={b.title || 'chart'}>
-        {vals.map((v, i) => { const h = Math.max(3, (v / max) * (H - 4)); return <rect key={i} x={i * step + (step - bw) / 2} y={H - h} width={bw} height={h} rx={2} fill={i >= hi ? '#F2B35E' : '#2A4A72'} /> })}
+        {vals.map((v, i) => { const h = Math.max(3, (v / max) * (H - 4)); return <rect key={i} x={i * step + (step - bw) / 2} y={H - h} width={bw} height={h} rx={2} style={{ fill: i >= hi ? 'var(--alert)' : 'var(--accent-line)' }} /> })}
       </svg>
       <div style={{ display: 'flex', justifyContent: 'space-between', font: '10px var(--mono)', color: 'var(--muted)' }}><span>{str(b.data.from)}</span><span>{str(b.data.to ?? 'now')}</span></div>
     </div></>)
