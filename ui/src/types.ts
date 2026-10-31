@@ -35,7 +35,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'vanta'
   text: string
-  tag?: 'heads-up' | 'error'
+  tag?: 'heads-up' | 'error' | 'narration'
   stageId?: string
   stageLabel?: string
   streaming?: boolean

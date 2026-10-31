@@ -1449,8 +1449,13 @@ def _run_report(sid: str, topic: str) -> None:
         socketio.emit("response", {"text": str(exc)}, room=sid)
         return
     import time as _t
-    rs = Researcher(strong, fast, chain(ddg_results), fetch_page, clock=_t.time,
-                    on_update=lambda run: socketio.emit("stage", report_stage(run, run.status == "running"), room=sid))
+    from research.narrate import Narrator
+    narrator = Narrator(fast, lambda line: socketio.emit("narrate", {"text": line}, room=sid), _t.time)
+
+    def _update(run):
+        socketio.emit("stage", report_stage(run, run.status == "running"), room=sid)
+        narrator.observe(run)
+    rs = Researcher(strong, fast, chain(ddg_results), fetch_page, clock=_t.time, on_update=_update)
     live_reports[sid + str(id(rs))] = rs
     socketio.emit("status", {"state": "thinking", "message": "Researching…"}, room=sid)
     try:
@@ -1458,7 +1463,8 @@ def _run_report(sid: str, topic: str) -> None:
         reports[run.id] = run
         if AWARE_OK:
             guardian.audit.add("report_run", run.id, topic=topic[:100], status=run.status, sources=len(run.sources), facts=len(run.facts), dropped=run.dropped)
-        text = (f"Your report on {run.title} is ready on the stage: {len(run.sources)} sources, {len(run.facts)} checked facts." if run.status == "done" else run.note or "The report didn't finish.")
+        closing = narrator.finish(run)
+        text = closing or (f"Your report on {run.title} is ready on the stage: {len(run.sources)} sources, {len(run.facts)} checked facts." if run.status == "done" else run.note or "The report didn't finish.")
         socketio.emit("response", {"text": text}, room=sid)
         if nudges and run.status == "done":
             nudges.nudge(f"report:{run.id}", "low", "Report ready", f"{run.title}: {len(run.facts)} checked facts from {len(run.sources)} sources.")

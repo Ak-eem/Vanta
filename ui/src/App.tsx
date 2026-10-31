@@ -56,8 +56,9 @@ export default function App() {
   const orbState: SphereState = rec.rec ? 'listening' : speaker.speaking && base === 'idle' ? 'speaking' : rec.busy ? 'thinking' : base
   const amplitude = rec.rec ? rec.level : speaker.speaking || orbState === 'speaking' ? 0.5 : 0
   const presenting = screen === 'home' && !!stage
-  const place = screen === 'overview' || presenting ? 'corner' : mode === 'chat' ? 'chat' : 'center'
-  const spot = orbSpot(place, w, h, narrow)
+  const place = screen === 'overview' || (presenting && mode === 'voice') ? 'corner' : mode === 'chat' ? 'chat' : 'center'
+  const split = mode === 'chat' && !!stage && !narrow
+  const spot = orbSpot(place, w, h, narrow, split ? Math.min(440, w * 0.42) : 0)
 
   const lastUser = [...state.messages].reverse().find((m) => m.role === 'user')?.text ?? ''
   const lastVanta = [...state.messages].reverse().find((m) => m.role === 'vanta')

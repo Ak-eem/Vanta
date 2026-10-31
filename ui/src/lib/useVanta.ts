@@ -160,6 +160,7 @@ export function useVanta() {
     socket.on('stream_chunk', (d: { chunk: string }) => dispatch({ t: 'chunk', text: d.chunk }))
     socket.on('stream_done', () => dispatch({ t: 'done' }))
     socket.on('response', (d: { text: string }) => dispatch({ t: 'say', text: d.text }))
+    socket.on('narrate', (d: { text?: unknown }) => { if (typeof d?.text === 'string' && d.text.trim()) dispatch({ t: 'say', text: d.text.slice(0, 240), tag: 'narration' }) })
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))

@@ -32,33 +32,35 @@ export function useSpeaker(messages: ChatMessage[], enabled: boolean): Speaker {
   const supported = typeof window !== 'undefined' && 'speechSynthesis' in window
   const [speaking, setSpeaking] = useState(false)
   const [muted, setMuted] = useState(false)
-  const track = useRef<{ id: string; at: number }>({ id: '', at: 0 })
+  const at = useRef<Map<string, number> | null>(null)   // how much of each message has been handed to the voice
   const pending = useRef(0)
   const live = enabled && !muted && supported
 
   const stop = () => {
     if (!supported) return
     window.speechSynthesis.cancel(); pending.current = 0; setSpeaking(false)
-    const last = messages[messages.length - 1]
-    if (last) track.current = { id: last.id, at: speakable(last.text).length }   // do not start reading the rest of what was cut off
+    for (const m of messages) at.current?.set(m.id, speakable(m.text).length)   // never resume what was cut off
   }
 
   useEffect(() => {
-    const last = messages[messages.length - 1]
-    if (!last || last.role !== 'vanta') return
-    const text = speakable(last.text)
-    if (track.current.id !== last.id) track.current = { id: last.id, at: 0 }
-    if (!live) { track.current.at = text.length; return }
-    const { sentences, next } = takeSentences(text, track.current.at, !last.streaming)
-    track.current.at = next
-    for (const s of sentences) {
-      const u = new SpeechSynthesisUtterance(s)
-      u.rate = 1.02
-      pending.current++
-      setSpeaking(true)
-      const end = () => { pending.current = Math.max(0, pending.current - 1); if (pending.current === 0) setSpeaking(false) }
-      u.onend = end; u.onerror = end
-      window.speechSynthesis.speak(u)
+    if (!at.current) { at.current = new Map(messages.map((m) => [m.id, speakable(m.text).length])); return }   // what was already on screen is history, not news
+    const map = at.current
+    for (const m of messages) {
+      if (m.role !== 'vanta') continue
+      const text = speakable(m.text)
+      const from = map.get(m.id) ?? 0
+      if (!live) { map.set(m.id, text.length); continue }
+      const { sentences, next } = takeSentences(text, from, !m.streaming)
+      map.set(m.id, next)
+      for (const s of sentences) {
+        const u = new SpeechSynthesisUtterance(s)
+        u.rate = 1.02
+        pending.current++
+        setSpeaking(true)
+        const end = () => { pending.current = Math.max(0, pending.current - 1); if (pending.current === 0) setSpeaking(false) }
+        u.onend = end; u.onerror = end
+        window.speechSynthesis.speak(u)
+      }
     }
   }, [messages, live])   // eslint-disable-line react-hooks/exhaustive-deps
 
