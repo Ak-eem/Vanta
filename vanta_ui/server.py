@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage, orchestra_stage
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage, orchestra_stage, report_stage, report_markdown
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -1153,6 +1153,8 @@ def handle_chat(data):
 
     if AWARE_OK and _system_command(sid, msg):
         return
+    if _report_command(sid, msg):
+        return
     if SETUPS_OK:
         if _setup_command(sid, msg):
             return
@@ -1431,6 +1433,53 @@ def _run_orchestra(sid: str, goal: str, root: Path) -> None:
         socketio.emit("response", {"text": f"The team hit a problem: {exc}"}, room=sid)
     finally:
         socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+REPORT_RE = re.compile(r"^\s*(?:/report\s+|(?:please\s+)?(?:make|write|build|do|give me|create)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:research\s+)?report\s+(?:on|about)\s+|(?:please\s+)?research\s+)(.{3,200}?)\s*[.!?]*\s*$", re.I)
+reports: dict = {}
+
+
+def _run_report(sid: str, topic: str) -> None:
+    """Searches, reads, checks and writes a report in the background. Needs the internet; works with whatever models the setup gives."""
+    from research.engine import Researcher
+    from research.search import chain, ddg_results, fetch_page
+    try:
+        strong, fast = router.pair() if SETUPS_OK else (lambda m: call_once(m, "CODE", max_tok=1500, temp=0.2), lambda m: call_once(m, "CODE", max_tok=900, temp=0.1))
+    except Exception as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    import time as _t
+    rs = Researcher(strong, fast, chain(ddg_results), fetch_page, clock=_t.time,
+                    on_update=lambda run: socketio.emit("stage", report_stage(run, run.status == "running"), room=sid))
+    live_reports[sid + str(id(rs))] = rs
+    socketio.emit("status", {"state": "thinking", "message": "Researching…"}, room=sid)
+    try:
+        run = rs.run(topic)
+        reports[run.id] = run
+        if AWARE_OK:
+            guardian.audit.add("report_run", run.id, topic=topic[:100], status=run.status, sources=len(run.sources), facts=len(run.facts), dropped=run.dropped)
+        text = (f"Your report on {run.title} is ready on the stage: {len(run.sources)} sources, {len(run.facts)} checked facts." if run.status == "done" else run.note or "The report didn't finish.")
+        socketio.emit("response", {"text": text}, room=sid)
+        if nudges and run.status == "done":
+            nudges.nudge(f"report:{run.id}", "low", "Report ready", f"{run.title}: {len(run.facts)} checked facts from {len(run.sources)} sources.")
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The research hit a problem: {exc}"}, room=sid)
+    finally:
+        live_reports.pop(sid + str(id(rs)), None)
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _report_command(sid: str, msg: str) -> bool:
+    m = REPORT_RE.match(msg)
+    if not m:
+        return False
+    if _offline():
+        socketio.emit("response", {"text": "Offline mode is on, so I can't search the web. Switch to another setup and ask again."}, room=sid)
+        return True
+    topic = m.group(1).strip()
+    socketio.emit("response", {"text": f"On it. I'll search, read the pages, check every fact, and put the report on the stage. You can walk away; I'll nudge you when it's ready."}, room=sid)
+    threading.Thread(target=_run_report, args=(sid, topic), daemon=True).start()
+    return True
 
 
 def _run_probe(sid: str) -> None:
@@ -1755,6 +1804,19 @@ def on_stage_action(data):
             back = o.rewind()
             guardian.audit.add("team_undo", rid, files=back)
             socketio.emit("response", {"text": f"Undone. I put back {len(back)} file(s) exactly as they were."}, room=sid)
+        return
+    if action.startswith("report:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        run = reports.get(rid)
+        if verb == "stop":
+            for rs in list(live_reports.values()):
+                if rs.r and rs.r.id == rid:
+                    rs.stop()
+        elif verb == "save" and run:
+            from utils import vanta_files
+            p = vanta_files.save_bytes(re.sub(r"[^\w ]", "", run.title)[:40].strip().replace(" ", "-") + "-report.md", report_markdown(run).encode("utf-8"))
+            socketio.emit("files_state", _files_state(), room=sid)
+            socketio.emit("response", {"text": f"Saved {p.name} in your VANTA folder. You can download it from the dashboard."}, room=sid)
         return
     if AWARE_OK and action.startswith("agent:"):
         _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
@@ -2159,6 +2221,7 @@ except Exception as _e:
 router = None
 builds: dict = {}
 orchs: dict = {}
+live_reports: dict = {}
 
 
 def _retry(fn, tries: int = 4):

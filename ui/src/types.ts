@@ -1,10 +1,10 @@
 export type SphereState = 'idle' | 'thinking' | 'speaking' | 'learning' | 'sleeping' | 'error' | 'alert'
 /** orbit = unrelated items float around the sphere; connected = related items linked with lines.
  *  single/compact/investigation are older names, still accepted. */
-export type LayoutMode = 'orbit' | 'connected' | 'single' | 'compact' | 'investigation'
+export type LayoutMode = 'orbit' | 'connected' | 'single' | 'compact' | 'investigation' | 'report'
 export type BlockType =
   | 'text' | 'node' | 'news' | 'chart' | 'code' | 'table' | 'image'
-  | 'steps' | 'svg' | 'html' | 'weather' | 'recommendation'
+  | 'steps' | 'svg' | 'html' | 'weather' | 'recommendation' | 'stat' | 'bars' | 'source'
 export type Tone = 'normal' | 'warn' | 'danger' | 'good'
 
 export interface Block {
@@ -22,6 +22,7 @@ export interface Stage {
   title: string
   ts: number
   layout?: LayoutMode
+  working?: boolean
   blocks: Block[]
   links?: Link[]
   actions?: StageAction[]

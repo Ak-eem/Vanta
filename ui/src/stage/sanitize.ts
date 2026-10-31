@@ -1,9 +1,9 @@
 import type { Block, BlockType, Link, LayoutMode, Stage, StageAction } from '../types'
 
-const TYPES: BlockType[] = ['text', 'node', 'news', 'chart', 'code', 'table', 'image', 'steps', 'svg', 'html', 'weather', 'recommendation']
-const MODES: LayoutMode[] = ['single', 'compact', 'investigation']
+const TYPES: BlockType[] = ['text', 'node', 'news', 'chart', 'code', 'table', 'image', 'steps', 'svg', 'html', 'weather', 'recommendation', 'stat', 'bars', 'source']
+const MODES: LayoutMode[] = ['single', 'compact', 'investigation', 'report']
 const TONES = ['normal', 'warn', 'danger', 'good']
-const MAX_BLOCKS = 12
+const MAX_BLOCKS = 16
 const MAX_MARKUP = 20_000
 
 const str = (v: unknown, max = 400): string => (typeof v === 'string' ? v.slice(0, max) : v == null ? '' : String(v).slice(0, max))
@@ -22,6 +22,11 @@ export function sanitizeStage(raw: unknown): Stage | null {
     const data = isObj(rb.data) ? { ...rb.data } : {}
     if ((rb.type === 'svg' || rb.type === 'html') && typeof data.markup === 'string') data.markup = data.markup.slice(0, MAX_MARKUP)
     if (rb.type === 'image' && typeof data.src === 'string' && !/^(data:image\/|https:\/\/|\/)/.test(data.src)) data.src = ''
+    if (rb.type === 'source') {
+      if (typeof data.image === 'string' && !/^https:\/\//.test(data.image)) data.image = ''
+      if (typeof data.url !== 'string' || !/^https:\/\//.test(data.url)) data.url = ''
+    }
+    if (rb.type === 'bars') data.points = (Array.isArray(data.points) ? data.points : []).slice(0, 8).filter((p: unknown) => isObj(p) && Number.isFinite(Number(p.value)))
     blocks.push({
       id, type: rb.type as BlockType, title: rb.title ? str(rb.title, 120) : undefined,
       tone: TONES.includes(rb.tone as string) ? (rb.tone as Block['tone']) : 'normal', data,
@@ -42,7 +47,7 @@ export function sanitizeStage(raw: unknown): Stage | null {
     id: str(raw.id, 60) || `stage-${Date.now()}`,
     title: str(raw.title, 80) || 'Stage',
     ts: typeof raw.ts === 'number' ? raw.ts : Date.now() / 1000,
-    layout: MODES.includes(raw.layout as LayoutMode) ? (raw.layout as LayoutMode) : undefined,
+    layout: MODES.includes(raw.layout as LayoutMode) ? (raw.layout as LayoutMode) : undefined, working: raw.working === true,
     blocks, links, actions, summary: raw.summary ? str(raw.summary, 300) : undefined,
   }
 }

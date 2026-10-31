@@ -5,6 +5,7 @@ import { computeLayout } from './layout'
 import { BlockBody } from './Blocks'
 import { Sphere, STATE_LABEL } from '../components/Sphere'
 import { SystemBoard } from '../components/SystemBoard'
+import { ReportView } from '../components/ReportView'
 import type { FilesState, HwState, WeatherState } from '../types'
 import type { CardId } from '../lib/hw'
 
@@ -41,6 +42,13 @@ export function StageView({ stage, history, pinned, sphere, amplitude, low, capt
   const actions = (stage?.actions ?? []).map((a) => (
     <button key={a.id} className={`btn ${a.kind ?? 'secondary'}`} onClick={() => stage && onAction(stage.id, a)}>{a.label}</button>))
   const labelY = layout.sphere.cy + layout.sphere.size / 2 + 6
+
+  if (stage?.layout === 'report') {
+    return (
+      <section className="hud report-mode" aria-label="Report">
+        <ReportView stage={stage} sphere={sphere} amplitude={amplitude} low={low} onClear={onClear} onAction={onAction} history={earlier} onOpen={onOpen} />
+      </section>)
+  }
 
   if (!stage && onEnd && onUninstall && onAsk) {
     return (

@@ -55,6 +55,29 @@ function Table({ b }: { b: Block }) {
       <tbody>{rows.map((r, i) => <tr key={i}>{(Array.isArray(r) ? r : [r]).map((c, j) => <td key={j}>{str(c)}</td>)}</tr>)}</tbody></table></div></>)
 }
 
+function Stat({ b }: { b: Block }) {
+  return (<><Head kind="stat" title={b.title} /><div className="block-body stat"><b>{str(b.data.value)}</b><span>{str(b.data.label)}</span></div></>)
+}
+
+function Bars({ b }: { b: Block }) {
+  const pts: { label: string; value: number }[] = Array.isArray(b.data.points) ? b.data.points.map((p: { label?: unknown; value?: unknown }) => ({ label: str(p.label), value: Number(p.value) })).filter((p: { value: number }) => Number.isFinite(p.value)) : []
+  const max = Math.max(1, ...pts.map((p) => p.value))
+  return (<><Head kind="chart" title={b.title} right={b.data.unit ? <span style={{ font: '10px var(--mono)', color: 'var(--muted)' }}>{str(b.data.unit)}</span> : null} />
+    <div className="block-body barchart" role="img" aria-label={b.title || 'bar chart'}>
+      {pts.map((p, i) => (<div className="bar-col" key={i}><em>{p.value}</em><i style={{ height: `${Math.max(4, (p.value / max) * 100)}%` }} /><span>{p.label}</span></div>))}
+    </div></>)
+}
+
+function Source({ b }: { b: Block }) {
+  const url = str(b.data.url), img = str(b.data.image)
+  let host = ''
+  try { host = new URL(url).hostname.replace(/^www\./, '') } catch { /* no link */ }
+  const body = (<>
+    {img ? <img className="src-img" src={img} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : null}
+    <div className="block-body src"><span className="src-n">{str(b.data.n)}</span><b>{b.title}</b><em>{host}</em></div></>)
+  return url ? <a className="src-link" href={url} target="_blank" rel="noopener noreferrer">{body}</a> : body
+}
+
 function Steps({ b }: { b: Block }) {
   const items: { label: string; state?: string }[] = (Array.isArray(b.data.items) ? b.data.items : []).map((x: unknown) =>
     typeof x === 'string' ? { label: x } : { label: str((x as { label?: unknown }).label), state: str((x as { state?: unknown }).state) })
@@ -104,6 +127,9 @@ export function BlockBody({ b }: { b: Block }) {
     case 'image': return <ImageBlock b={b} />
     case 'svg': case 'html': return <Sandboxed b={b} />
     case 'weather': return <Weather b={b} />
+    case 'stat': return <Stat b={b} />
+    case 'bars': return <Bars b={b} />
+    case 'source': return <Source b={b} />
     default: return null
   }
 }
