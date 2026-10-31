@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Cloud, type Cfg, type Data, type Note } from '../sync/cloud'
 import { clearKey, loadKey, saveKey } from '../sync/keystore'
 import { WrongPassphrase } from '../sync/crypto'
+import { feel } from '../lib/feel'
 
 const CFG = 'vanta.phone.cfg', RT = 'vanta.phone.rt'
 const readCfg = (): Cfg | null => { try { return JSON.parse(localStorage.getItem(CFG) ?? 'null') } catch { return null } }
@@ -77,11 +78,14 @@ export default function PhoneApp() {
   const sendChat = async () => {
     if (!draft.trim() || !cloud.current || !key.current) return
     const t = draft; setDraft('')
+    feel('send')
     try { await cloud.current.sendChat(key.current, t); refresh() } catch (e) { setMsg(e instanceof Error ? e.message : 'Could not send'); setDraft(t) }
   }
   const chats = data?.chats ?? []
   const last = chats[chats.length - 1]
   const waiting = !!last && last.role === 'user'
+  const wasWaiting = useRef(false)
+  useEffect(() => { if (wasWaiting.current && !waiting) feel('reply'); wasWaiting.current = waiting }, [waiting])   // a buzz when the reply lands
   // While a reply is pending (or the chat tab is open) check for it every few seconds.
   useEffect(() => {
     if (!ready || tab !== 'chat') return
