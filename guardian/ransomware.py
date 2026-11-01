@@ -1,12 +1,12 @@
-"""Behaviour watch for ransomware. Catches the thing file scanning can miss: a program that has already started encrypting.
+"""Behaviour watch for ransomware. Catches activity that file scanning can miss.
 
 Signals (each is cheap and none is enough alone):
   canary  - a decoy file VANTA planted in your folders was changed, renamed or deleted (you never touch these)
   burst   - many files changed across many folders within seconds
   rename  - lots of files suddenly renamed to the same new ending (.locked, .encrypted, random)
   notes   - the same 'how to get your files back' note appearing in many folders
-Two different signals trigger the emergency stop, which kills the program writing the most data (and what it started) with
-no waiting. If VANTA can't tell which program it is, it does not guess: it alerts you instead."""
+Two independent signals trigger an alert and offer review of likely writers. Containment remains subject to explicit user
+approval; if VANTA can't identify a likely writer, it alerts without guessing."""
 from __future__ import annotations
 
 import os
@@ -78,7 +78,7 @@ class RansomwareWatch:
                  alert_only: Callable[[dict], None], window: float = 10.0, burst_files: int = 40, burst_dirs: int = 3,
                  clock: Callable[[], float] = time.time, cooldown: float = 120.0, retry_delay: float = 0.6) -> None:
         self.retry_delay = retry_delay
-        self.canaries = {str(Path(c)) for c in canaries}
+        self.canaries = {self._normalized_path(str(Path(c))) for c in canaries}
         self.tracker, self.respond, self.alert_only = tracker, respond, alert_only
         self.window, self.burst_files, self.burst_dirs, self.clock, self.cooldown = window, burst_files, burst_dirs, clock, cooldown
         self.events: deque = deque()          # (ts, kind, path, dest)
@@ -86,11 +86,16 @@ class RansomwareWatch:
         self.last_fire = -1e9
         self.enabled = True
 
+    @staticmethod
+    def _normalized_path(path: str) -> str:
+        return os.path.normcase(os.path.abspath(os.path.normpath(path)))
+
     def on_event(self, kind: str, path: str, dest: str = "") -> None:
         now = self.clock()
-        if path in self.canaries or (dest and path in self.canaries):
+        endpoints = [p for p in (path, dest) if p]
+        if any(self._normalized_path(p) in self.canaries for p in endpoints):
             self.canary_hit = now
-        if not SAFE_BULK.search(path):
+        if any(not SAFE_BULK.search(p) for p in endpoints):
             self.events.append((now, kind, path, dest))
         while self.events and now - self.events[0][0] > self.window:
             self.events.popleft()
@@ -99,7 +104,8 @@ class RansomwareWatch:
     def signals(self, now: float) -> dict:
         ev = [e for e in self.events if now - e[0] <= self.window]
         files = {e[2] for e in ev if e[1] in ("modified", "created", "moved", "deleted")}
-        dirs = {os.path.dirname(f) for f in files}
+        dirs = {os.path.dirname(p) for e in ev if e[1] in ("modified", "created", "moved", "deleted")
+                for p in (e[2], e[3]) if p and not SAFE_BULK.search(p)}
         renamed = [Path(e[3]) for e in ev if e[1] == "moved" and e[3]]
         new_ext = Counter(p.suffix.lower() for p in renamed if p.suffix)
         top_ext, top_n = (new_ext.most_common(1) or [("", 0)])[0]

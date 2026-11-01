@@ -51,6 +51,41 @@ def test_canary_plus_burst_triggers_and_only_the_big_writer_is_chosen(tmp_path):
     assert len(hit) == 1 and [x["pid"] for x in hit[0][0]] == [1234]
 
 
+def test_renamed_canary_is_detected_as_either_move_endpoint(tmp_path):
+    w, t, hit, alerts = watch(tmp_path, {})
+    canary = str(tmp_path / "Docs" / "!_vanta_do_not_touch.docx")
+
+    w.on_event("moved", str(tmp_path / "Docs" / "renamed.docx"), canary)
+
+    assert w.signals(t[0])["canary"]
+    assert hit == [] and alerts == []
+
+
+def test_move_counts_both_non_ignored_directories(tmp_path):
+    w, t, hit, alerts = watch(tmp_path, {}, burst_files=2, burst_dirs=3)
+    w.on_event("moved", str(tmp_path / "a" / "one.docx"), str(tmp_path / "b" / "one.locked"))
+    w.on_event("modified", str(tmp_path / "c" / "two.docx"))
+
+    signals = w.signals(t[0])
+
+    assert signals["files"] == 2
+    assert signals["dirs"] == 3
+    assert hit == [] and alerts == []
+
+
+def test_safe_bulk_move_destination_does_not_hide_protected_activity(tmp_path):
+    w, t, hit, alerts = watch(tmp_path, {}, burst_files=2, burst_dirs=2)
+    w.on_event("moved", str(tmp_path / "project" / "node_modules" / "one.js"),
+               str(tmp_path / "Docs" / "one.js.locked"))
+    w.on_event("modified", str(tmp_path / "Pictures" / "two.jpg"))
+
+    signals = w.signals(t[0])
+
+    assert signals["files"] == 2
+    assert signals["dirs"] == 2
+    assert hit == [] and alerts == []
+
+
 def test_unknown_culprit_alerts_instead_of_guessing(tmp_path):
     w, t, hit, alerts = watch(tmp_path, {})
     w.on_event("modified", str(tmp_path / "Docs" / "!_vanta_do_not_touch.txt"))
