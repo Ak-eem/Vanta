@@ -680,13 +680,7 @@ def stream_response(sid: str, messages: list, mode: str,
         max_tokens=4000 if mode == "CODE" else 2000,
         temperature=0.15 if mode == "CODE" else 0.55,
         stream=True,
-        include_reasoning=False,  # GPT-OSS puts reasoning in its own field by
-                                   # default — we never read that field, so on
-                                   # short/trivial input the model can spend its
-                                   # whole turn there and leave content empty.
     )
-    if reasoning_effort:
-        params["reasoning_effort"] = reasoning_effort
     print(f"🟡 Calling Groq (stream): model={params['model']!r} effort={reasoning_effort!r}")
     try:
         for chunk in client.chat.completions.create(**params):
@@ -756,10 +750,7 @@ def call_once(messages: list, mode: str, max_tok: int = None, temp: float = None
         model=model or MODEL, messages=messages,
         max_tokens=max_tok or (4000 if mode == "CODE" else 2000),  # see stream_response — TPM, not the output ceiling
         temperature=temp or (0.15 if mode == "CODE" else 0.55),
-        include_reasoning=False,
     )
-    if reasoning_effort:
-        params["reasoning_effort"] = reasoning_effort
     resp = client.chat.completions.create(**params)
     return resp.choices[0].message.content
 
@@ -1300,6 +1291,11 @@ def handle_chat(data):
     if model_stage:
         socketio.emit("stage", model_stage, room=sid)
         final = clean_final
+
+    if not final.strip():
+        socketio.emit("status", {"state": "idle"}, room=sid)
+        return
+
     save_history(sid, msg, final)
     compact_history_if_needed(sid)
     socketio.emit("stream_done", {"model": MODEL, "mode": mode}, room=sid)
