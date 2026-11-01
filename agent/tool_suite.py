@@ -20,23 +20,23 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from . import loop as _loop
-from .permissions import Denied, check_secret, resolve_inside
+from .permissions import Denied, check_secret, decide, resolve_inside
 
 
 _DESCRIPTIONS = {
     "Read": "Read a project file (alias for read_file).",
-    "Write": "Create or overwrite a project file; always asks approval.",
-    "Edit": "Replace exact text in a project file; always asks approval.",
+    "Write": "Create or overwrite a project file; follows the current permission mode.",
+    "Edit": "Replace exact text in a project file; follows the current permission mode.",
     "Glob": "Find project files by path pattern (alias for list_files).",
     "Grep": "Search project file contents (alias for grep).",
-    "NotebookEdit": "Edit a Jupyter notebook cell by index; always asks approval.",
+    "NotebookEdit": "Edit a Jupyter notebook cell by index; follows the current permission mode.",
     "LSP": "Python symbol-definition lookup and syntax diagnostics (not a full language server).",
-    "Bash": "Run one safe, sandboxed command (alias for run_command); always asks approval.",
+    "Bash": "Run one safe, sandboxed command (alias for run_command); follows the current permission mode.",
     "PowerShell": "Not available: no safe PowerShell sandbox is configured.",
     "Monitor": "Not available: VANTA has no background-process manager.",
     "WebSearch": "Search the web through VANTA's configured search provider; always asks approval.",
     "WebFetch": "Fetch a public HTTP(S) page with pinned-IP SSRF protections; always asks approval.",
-    "Agent": "Delegate a read-only helper (alias for subagent).",
+    "Agent": "Delegate a constrained analysis helper (alias for subagent).",
     "SendMessage": "Not available: delegates run synchronously and have no message channel.",
     "ListAgents": "List this agent and any synchronous delegate state.",
     "SubagentHandback": "Not available: no asynchronous delegate handback channel exists.",
@@ -69,7 +69,7 @@ _DESCRIPTIONS = {
     "ListMcpResourcesTool": "Not available: no MCP client/server is configured.",
     "ReadMcpResourceTool": "Not available: no MCP client/server is configured.",
     "WaitForMcpServers": "Not available: no MCP client/server is configured.",
-    "Artifact": "Write a named artifact under .vanta/artifacts/; always asks approval.",
+    "Artifact": "Write a named artifact under .vanta/artifacts/; follows the current permission mode.",
 }
 
 _HELP = "\nAdditional tools (ONE JSON action per turn):\n" + "\n".join(
@@ -83,10 +83,7 @@ _ALIASES = {
     "WebSearch": "web_search", "Agent": "subagent",
     "AskUserQuestion": "ask_user",
 }
-_MUST_APPROVE = {
-    "write_file", "edit_file", "run_command", "web_search", "web_fetch",
-    "NotebookEdit", "Artifact", "TaskCreate", "TaskUpdate", "TaskStop", "TodoWrite",
-}
+_ALWAYS_APPROVE_ALIASES = {"web_search"}
 _UNAVAILABLE = {
     "PowerShell", "Monitor", "SendMessage", "SubagentHandback", "EnterWorktree",
     "ExitWorktree", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup",
@@ -97,10 +94,16 @@ _UNAVAILABLE = {
 
 
 def _approval(agent: Any, action: str, detail: str) -> bool:
-    try:
-        return bool(agent.approve(action, detail))
-    except Exception:
-        return False
+    return bool(agent.approve(action, detail))
+
+
+def _permission_mode(agent: Any) -> str:
+    return "plan" if agent.depth > 0 else agent.mode
+
+
+def _require_approval(agent: Any, action: str, detail: str) -> None:
+    if not _approval(agent, action, detail):
+        raise Denied(f"You said no to {action.lower()}.")
 
 
 def _inside(agent: Any, path: str) -> Path:
@@ -214,47 +217,42 @@ def _secure_fetch(agent: Any, first_url: str) -> str:
 
 
 def _notebook_edit(agent: Any, args: dict[str, Any]) -> str:
-    if getattr(agent, "mode", "ask") == "plan":
-        return "Not allowed in plan mode."
     path = _inside(agent, str(args.get("path", "")))
     if path.suffix.lower() != ".ipynb" or not path.is_file():
-        return "NotebookEdit requires an existing .ipynb file."
-    try:
-        notebook = json.loads(path.read_text(encoding="utf-8"))
-        cells = notebook["cells"]
-        action = str(args.get("action", "update"))
-        source = str(args.get("source", ""))
-        index = int(args.get("cell_index", -1))
-        if action == "append":
-            index = len(cells)
-            cells.append({"cell_type": str(args.get("cell_type", "code")), "metadata": {},
-                          "source": source.splitlines(keepends=True), **({"outputs": [], "execution_count": None} if args.get("cell_type", "code") == "code" else {})})
-        elif action == "insert":
-            if index < 0 or index > len(cells):
-                return "cell_index is outside the notebook."
-            cell_type = str(args.get("cell_type", "code"))
-            cell = {"cell_type": cell_type, "metadata": {}, "source": source.splitlines(keepends=True)}
-            if cell_type == "code":
-                cell.update({"outputs": [], "execution_count": None})
-            cells.insert(index, cell)
-        elif action == "delete":
-            if index < 0 or index >= len(cells):
-                return "cell_index is outside the notebook."
-            del cells[index]
-        elif action == "update":
-            if index < 0 or index >= len(cells):
-                return "cell_index is outside the notebook."
-            cells[index]["source"] = source.splitlines(keepends=True)
-        else:
-            return "action must be update, insert, append, or delete."
-        agent.cp.save(path)
-        path.write_text(json.dumps(notebook, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-        rel = path.relative_to(agent.root).as_posix()
-        if rel not in agent.run.changed:
-            agent.run.changed.append(rel)
-        return f"Updated notebook {rel} (action={action}, cell={index})."
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        return f"Could not edit notebook: {exc}"
+        raise ValueError("NotebookEdit requires an existing .ipynb file.")
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    cells = notebook["cells"]
+    action = str(args.get("action", "update"))
+    source = str(args.get("source", ""))
+    index = int(args.get("cell_index", -1))
+    if action == "append":
+        index = len(cells)
+        cells.append({"cell_type": str(args.get("cell_type", "code")), "metadata": {},
+                      "source": source.splitlines(keepends=True), **({"outputs": [], "execution_count": None} if args.get("cell_type", "code") == "code" else {})})
+    elif action == "insert":
+        if index < 0 or index > len(cells):
+            raise ValueError("cell_index is outside the notebook.")
+        cell_type = str(args.get("cell_type", "code"))
+        cell = {"cell_type": cell_type, "metadata": {}, "source": source.splitlines(keepends=True)}
+        if cell_type == "code":
+            cell.update({"outputs": [], "execution_count": None})
+        cells.insert(index, cell)
+    elif action == "delete":
+        if index < 0 or index >= len(cells):
+            raise ValueError("cell_index is outside the notebook.")
+        del cells[index]
+    elif action == "update":
+        if index < 0 or index >= len(cells):
+            raise ValueError("cell_index is outside the notebook.")
+        cells[index]["source"] = source.splitlines(keepends=True)
+    else:
+        raise ValueError("action must be update, insert, append, or delete.")
+    agent.cp.save(path)
+    path.write_text(json.dumps(notebook, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    rel = path.relative_to(agent.root).as_posix()
+    if rel not in agent.run.changed:
+        agent.run.changed.append(rel)
+    return f"Updated notebook {rel} (action={action}, cell={index})."
 
 
 def _lsp(agent: Any, args: dict[str, Any]) -> str:
@@ -372,14 +370,16 @@ def _suite_tool(agent: Any, name: str, args: dict[str, Any], original: Any) -> s
             out.append({"tool": step["tool"], "result": result[:3000]})
         return json.dumps(out, ensure_ascii=False)
     if name in ("TaskCreate", "TaskUpdate", "TaskStop", "TodoWrite"):
-        if agent.mode == "plan" or not _approval(agent, name, json.dumps(args, ensure_ascii=False)[:500]):
-            return "Not approved; no task changes were made."
+        if _permission_mode(agent) == "plan":
+            raise Denied("I'm in plan mode, so I can't change task state.")
+        _require_approval(agent, name, json.dumps(args, ensure_ascii=False)[:500])
         return _task_tool(agent, name, args)
     if name in ("TaskGet", "TaskList", "TaskOutput"):
         return _task_tool(agent, name, args)
     if name == "NotebookEdit":
-        if not _approval(agent, "Edit notebook", str(args.get("path", ""))):
-            return "Not approved; notebook was not changed."
+        decision = decide(_permission_mode(agent), "notebook_edit", args)
+        if decision == "ask":
+            _require_approval(agent, "Edit notebook", str(args.get("path", "")))
         return _notebook_edit(agent, args)
     if name == "LSP":
         return _lsp(agent, args)
@@ -404,11 +404,9 @@ def _suite_tool(agent: Any, name: str, args: dict[str, Any], original: Any) -> s
                    if not query or query in key.lower() or query in value.lower()]
         return json.dumps(matches[:30], ensure_ascii=False)
     if name == "Artifact":
-        if agent.mode == "plan" or not _approval(agent, "Write artifact", str(args.get("name", "artifact"))):
-            return "Not approved; artifact was not written."
         filename = str(args.get("name", "artifact.txt"))
         if not filename or Path(filename).name != filename or filename in (".", ".."):
-            return "Artifact name must be a simple filename."
+            raise Denied("Artifact name must be a simple filename.")
         return original(agent, "write_file", {"path": f".vanta/artifacts/{filename}", "content": str(args.get("content", ""))})
     if name == "ReportFindings":
         findings = args.get("findings", args.get("text", ""))
@@ -440,40 +438,21 @@ def _suite_tool(agent: Any, name: str, args: dict[str, Any], original: Any) -> s
             args = {"task": args.get("task", "")}
         elif name == "AskUserQuestion":
             args = {"question": args.get("question", args.get("prompt", ""))}
-        sensitive = target in _MUST_APPROVE
-        if sensitive and not _approval(agent, name, json.dumps(args, ensure_ascii=False)[:500]):
-            return "Not approved; action was not run."
-        if name == "WebSearch":
-            return original(agent, target, args)
-        if sensitive:
-            old_approve = agent.approve
-            agent.approve = lambda *_a, **_k: True
-            try:
-                return original(agent, target, args)
-            finally:
-                agent.approve = old_approve
+        if target in _ALWAYS_APPROVE_ALIASES:
+            _require_approval(agent, name, json.dumps(args, ensure_ascii=False)[:500])
         return original(agent, target, args)
     if name == "WebFetch":
         url = str(args.get("url", ""))
-        if not _approval(agent, "Fetch a web page", url[:500]):
-            return "Not approved; no network request was made."
-        try:
-            return _secure_fetch(agent, url)
-        except Exception as exc:
-            return f"WebFetch blocked or failed: {exc}"
+        _require_approval(agent, "Fetch a web page", url[:500])
+        return _secure_fetch(agent, url)
     if name in ("list_files", "grep", "read_file", "edit_file", "write_file", "run_command",
                 "web_search", "web_fetch", "note", "subagent", "ask_user"):
-        if name in _MUST_APPROVE and not _approval(agent, name, json.dumps(args, ensure_ascii=False)[:500]):
-            return "Not approved; action was not run."
         if name == "web_fetch":
-            return _secure_fetch(agent, str(args.get("url", "")))
-        if name in _MUST_APPROVE:
-            old_approve = agent.approve
-            agent.approve = lambda *_a, **_k: True
-            try:
-                return original(agent, name, args)
-            finally:
-                agent.approve = old_approve
+            url = str(args.get("url", ""))
+            _require_approval(agent, "Fetch a web page", url[:500])
+            return _secure_fetch(agent, url)
+        if name == "web_search":
+            _require_approval(agent, "Search the web", json.dumps(args, ensure_ascii=False)[:500])
         return original(agent, name, args)
     return original(agent, name, args)
 

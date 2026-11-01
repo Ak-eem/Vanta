@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 MODES = ("plan", "ask", "accept_edits", "auto")
 READ_TOOLS = {"read_file", "list_files", "grep", "web_search", "web_fetch", "note", "ask_user", "subagent"}
-EDIT_TOOLS = {"write_file", "edit_file"}
+EDIT_TOOLS = {"write_file", "edit_file", "notebook_edit"}
 SECRET_GLOBS = (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.pfx", "*.p12", "credentials*", "secrets*", ".npmrc", ".pypirc", "*.kdbx", "wallet*.dat")
 SECRET_DIRS = {".ssh", ".aws", ".gnupg", ".kube", ".azure"}
 NEVER_RUN = {"rm", "rmdir", "del", "erase", "format", "diskpart", "shutdown", "reboot", "reg", "regedit", "netsh", "sc", "taskkill", "kill", "pkill", "chmod",
