@@ -20,5 +20,6 @@ describe('takeSentences', () => {
     const r = takeSentences('One. And a tail without a stop', 0, true)
     expect(r.sentences).toEqual(['One.', 'And a tail without a stop'])
   })
+  it('does not break inside website names', () => { expect(takeSentences('Found pages on a.com and b.org. Reading now.', 0, true).sentences).toEqual(['Found pages on a.com and b.org.', 'Reading now.']) })
   it('does not break on decimals', () => { expect(takeSentences('It costs 3.5 million. Done.', 0, true).sentences).toEqual(['It costs 3.5 million.', 'Done.']) })
 })

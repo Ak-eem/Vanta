@@ -3,7 +3,8 @@ import { useState } from 'react'
 const Ic = ({ d }: { d: string }) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
 
 /** Voice mode: the orb owns the screen. When VANTA presents something the orb steps to the corner and `children` (the table) fills the screen. */
-export function VoiceMode({ presenting, status, you, line, rec, busy, speaking, muted, supported, onMic, onStop, onMute, onSend, children }: {
+export function VoiceMode({ presenting, status, you, line, rec, busy, speaking, muted, supported, wake, onMic, onStop, onMute, onSend, children }: {
+  wake: { supported: boolean; on: boolean; listening: boolean; error: string; toggle: () => void }
   presenting: boolean; status: string; you: string; line: string
   rec: boolean; busy: boolean; speaking: boolean; muted: boolean; supported: boolean
   onMic: () => void; onStop: () => void; onMute: () => void; onSend: (t: string) => void; children?: React.ReactNode
@@ -32,9 +33,13 @@ export function VoiceMode({ presenting, status, you, line, rec, busy, speaking, 
           <button className={`vbtn mic ${rec ? 'rec' : ''}`} aria-label={rec ? 'Stop and send' : 'Speak to VANTA'} aria-pressed={rec} disabled={busy} onClick={onMic}>
             <Ic d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3" /></button>
           <button className="vbtn" aria-label="Stop talking" disabled={!speaking} onClick={onStop}><Ic d="M7 7h10v10H7z" /></button>
+          <button className="vbtn" aria-label={wake.on ? 'Stop listening for Hey VANTA' : 'Listen for Hey VANTA'} aria-pressed={wake.on} disabled={!wake.supported} title={wake.supported ? 'Say “Hey VANTA” to start talking' : 'Your browser cannot listen for a wake word (try Chrome or Edge)'} onClick={wake.toggle}>
+            <Ic d="M2 12h2M6 8v8M10 4v16M14 7v10M18 9v6M22 12h-2" /></button>
           <button className="vbtn" aria-label="Type instead" aria-pressed={typing} onClick={() => setTyping((t) => !t)}><Ic d="M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M8 14h8" /></button>
         </div>
-        {rec ? <div className="mic-note" role="status"><i />Microphone is on</div> : null}
+        {rec ? <div className="mic-note" role="status"><i />Microphone is on</div>
+          : wake.listening ? <div className="mic-note wake" role="status"><i />Listening for “Hey VANTA”</div>
+          : wake.error ? <div className="mic-note" role="status">{wake.error}</div> : null}
       </div>
     </div>)
 }

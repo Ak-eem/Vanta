@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage } from '../types'
 import { stripStage } from './Chat'
+import { stripCues } from '../lib/cues'
 
 const hello = (h: number) => (h < 5 ? 'Still up?' : h < 12 ? 'Good morning.' : h < 18 ? 'Good afternoon.' : 'Good evening.')
 const IDEAS = ['How is my laptop doing?', 'Research something for me', 'What should I work on next?', "What's the weather like?"]
@@ -51,7 +52,7 @@ export function ChatMode({ messages, onOpenStage, onSend, disabled, onVoiceError
             <div key={m.id} className={`msg vanta ${m.tag === 'error' ? 'error' : ''}`}>
               {m.tag === 'heads-up' ? <div className="msg-tag">Heads-up</div> : null}
               {m.tag === 'error' ? <div className="msg-tag">Hiccup</div> : null}
-              <div className="msg-text">{stripStage(m.text)}{m.streaming ? <span className="caret" /> : null}</div>
+              <div className="msg-text">{stripCues(stripStage(m.text))}{m.streaming ? <span className="caret" /> : null}</div>
               {m.stageId ? <button className="pres" onClick={() => onOpenStage(m.stageId!)}><span className="pres-ico"><Ico d="M4 5h16v11H4zM8 20h8M12 16v4" /></span><span><b>{m.stageLabel || 'Presentation'}</b><small>Open it on screen</small></span></button> : null}
             </div>))}
           {status ? <div className="msg note live"><i />{status}</div> : null}

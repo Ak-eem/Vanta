@@ -204,11 +204,11 @@ export function useVanta() {
     return () => { window.clearInterval(timer); socket.close() }
   }, [])
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, voice = false) => {
     const t = text.trim()
     if (!t) return
     dispatch({ t: 'user', text: t })
-    sock.current?.emit('chat', { message: t, think: false })
+    sock.current?.emit('chat', { message: t, think: false, voice })
   }, [])
   const api = useMemo(() => ({
     send,

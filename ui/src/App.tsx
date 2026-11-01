@@ -12,7 +12,9 @@ import { StageView } from './stage/StageView'
 import { chooseMode } from './stage/layout'
 import { useFx } from './lib/useFx'
 import { useTheme } from './lib/theme'
-import { useSpeaker, speakable } from './lib/speaker'
+import { useSpeaker, speakable, useVoices, readVoice, writeVoice } from './lib/speaker'
+import { stripCues } from './lib/cues'
+import { useWake } from './lib/wake'
 import { useRecorder } from './lib/recorder'
 import { orbSpot } from './lib/orb'
 import { sphereState, useVanta } from './lib/useVanta'
@@ -50,11 +52,26 @@ export default function App() {
 
   const stage = useMemo(() => state.stages.find((s) => s.id === state.activeStageId) ?? null, [state.stages, state.activeStageId])
   const speaker = useSpeaker(state.messages, mode === 'voice')
-  const rec = useRecorder((t) => api.send(t), (m) => api.dispatch({ t: 'error', message: m }))
+  const rec = useRecorder((t) => api.send(t, mode === 'voice'), (m) => api.dispatch({ t: 'error', message: m }))
+  const voices = useVoices()
+  const [voiceName, setVoiceName] = useState(readVoice)
+  const wake = useWake(() => { if (!rec.rec && !rec.busy) rec.toggle() }, rec.rec || rec.busy || speaker.speaking || mode !== 'voice' || screen !== 'home')
+  useEffect(() => {
+    // Space (or Ctrl+Space anywhere) starts and stops listening: a manual way in that needs no wake word
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || mode !== 'voice' || screen !== 'home') return
+      const t = e.target as HTMLElement | null
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+      if ((typing || t?.tagName === 'BUTTON') && !e.ctrlKey) return
+      e.preventDefault(); if (!rec.busy) rec.toggle()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   const base = sphereState(state)
   const orbState: SphereState = rec.rec ? 'listening' : speaker.speaking && base === 'idle' ? 'speaking' : rec.busy ? 'thinking' : base
-  const amplitude = rec.rec ? rec.level : speaker.speaking || orbState === 'speaking' ? 0.5 : 0
+  const amplitude = rec.rec ? rec.level : speaker.speaking ? Math.max(0.25, speaker.level) : orbState === 'speaking' ? 0.5 : 0
   const presenting = screen === 'home' && !!stage
   const place = screen === 'overview' || (presenting && mode === 'voice') ? 'corner' : mode === 'chat' ? 'chat' : 'center'
   const split = mode === 'chat' && !!stage && !narrow
@@ -62,7 +79,7 @@ export default function App() {
 
   const lastUser = [...state.messages].reverse().find((m) => m.role === 'user')?.text ?? ''
   const lastVanta = [...state.messages].reverse().find((m) => m.role === 'vanta')
-  const lineAll = lastVanta ? speakable(lastVanta.text) : 'Tap the mic and talk to me.'
+  const lineAll = lastVanta ? stripCues(speakable(lastVanta.text)) : 'Tap the mic, press Space, or say “Hey VANTA”.'
   const line = lineAll.length > 260 ? '…' + lineAll.slice(-240) : lineAll
 
   const on = Object.entries(state.privacy.sources).filter(([, v]) => v).map(([k]) => NAMES[k] ?? k)
@@ -90,6 +107,7 @@ export default function App() {
     <div className="shell" data-mode={mode} data-side={sb.open ? 'open' : 'closed'} data-place={place} data-theme-now={theme}>
       <Sidebar sb={sb} mode={mode} onMode={(m) => { setMode(m); setScreen('home') }} screen={screen} onScreen={(s) => { setScreen(s); if (narrow) sb.hide() }}
         history={earlier} onOpenStage={(id) => { openStage(id); if (narrow) sb.hide() }} onSettings={() => setSettings(true)}
+        voices={voices} voice={voiceName} onVoice={(n) => { writeVoice(n); setVoiceName(n) }}
         pill={pillText} paused={state.privacy.paused} watching={watching} onPause={() => api.pause(!state.privacy.paused)} theme={themePref} onTheme={setThemePref}
         footer={<SetupSwitcher s={state.setup} onSet={api.setSetup} />} />
 
@@ -102,7 +120,7 @@ export default function App() {
           </section>
         ) : mode === 'voice' ? (
           <VoiceMode presenting={presenting} status={state.statusText} you={lastUser} line={line} rec={rec.rec} busy={rec.busy || state.status === 'thinking'} speaking={speaker.speaking}
-            muted={speaker.muted} supported={speaker.supported} onMic={rec.toggle} onStop={speaker.stop} onMute={() => speaker.setMuted(!speaker.muted)} onSend={api.send}>{presentation}</VoiceMode>
+            muted={speaker.muted} supported={speaker.supported} wake={wake} onMic={rec.toggle} onStop={speaker.stop} onMute={() => speaker.setMuted(!speaker.muted)} onSend={(t) => api.send(t, true)}>{presentation}</VoiceMode>
         ) : (
           <ChatMode messages={state.messages} onOpenStage={openStage} onSend={api.send} disabled={state.conn !== 'online'} onVoiceError={(m) => api.dispatch({ t: 'error', message: m })} status={state.statusText}>{presentation}</ChatMode>
         )}

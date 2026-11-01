@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
+from vanta_ui.voicestyle import apply_voice
 from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage, orchestra_stage, report_stage, report_markdown
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
@@ -1129,6 +1130,7 @@ def handle_chat(data):
     sid  = request.sid
     msg  = data.get("message", "").strip()
     think_mode = bool(data.get("think", False))
+    voice_reply = bool(data.get("voice", False))
     print(f"🔵 handle_chat received: {msg[:60]!r}")
     if not msg:
         return
@@ -1254,7 +1256,7 @@ def handle_chat(data):
     if SETUPS_OK and setup_store.profile["effort"]:
         effort = setup_store.profile["effort"]          # Think with me: always the deepest thinking
     routed_model = pick_model(effort)
-    messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    messages = apply_voice(build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort), voice_reply)
     if SETUPS_OK and setup_store.profile["overlay"]:
         messages[0]["content"] += "\n\n" + setup_store.profile["overlay"]
     if wants_stage(msg):

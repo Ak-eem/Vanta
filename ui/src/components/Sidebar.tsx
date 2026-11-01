@@ -44,9 +44,9 @@ export function useSidebar() {
 
 const Icon = ({ d }: { d: string }) => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
 
-export function Sidebar({ sb, mode, onMode, screen, onScreen, history, onOpenStage, onSettings, pill, paused, watching, onPause, theme, onTheme, footer }: {
+export function Sidebar({ sb, mode, onMode, screen, onScreen, history, onOpenStage, onSettings, voices, voice, onVoice, pill, paused, watching, onPause, theme, onTheme, footer }: {
   sb: ReturnType<typeof useSidebar>; mode: Mode; onMode: (m: Mode) => void; screen: Screen; onScreen: (s: Screen) => void
-  history: Stage[]; onOpenStage: (id: string) => void; onSettings: () => void
+  history: Stage[]; onOpenStage: (id: string) => void; onSettings: () => void; voices: { name: string }[]; voice: string; onVoice: (n: string) => void
   pill: string; paused: boolean; watching: boolean; onPause: () => void; theme: ThemePref; onTheme: (t: ThemePref) => void; footer?: React.ReactNode
 }) {
   return (<>
@@ -69,6 +69,8 @@ export function Sidebar({ sb, mode, onMode, screen, onScreen, history, onOpenSta
           {history.slice(0, 6).map((h) => <button key={h.id} onClick={() => onOpenStage(h.id)} title={h.title}>{h.title}</button>)}</div>) : <div className="side-hist" />}
       <div className="side-foot">
         {footer}
+        {voices.length ? <label className="voice-pick"><span>Voice</span>
+          <select value={voice} onChange={(e) => onVoice(e.target.value)} aria-label="VANTA's voice"><option value="">Best available</option>{voices.slice(0, 40).map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}</select></label> : null}
         <div className="seg3" role="radiogroup" aria-label="Look">
           {(['auto', 'light', 'dark'] as ThemePref[]).map((t) => <button key={t} role="radio" aria-checked={theme === t} onClick={() => onTheme(t)}>{t[0].toUpperCase() + t.slice(1)}</button>)}
         </div>
