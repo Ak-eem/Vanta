@@ -42,6 +42,24 @@ def test_acts_after_veto_window_and_logs_as_auto(tmp_path):
     assert any(e["detail"].get("by") == "VANTA (auto)" for e in g.audit.recent())
 
 
+def test_process_termination_always_requires_explicit_approval(tmp_path):
+    g, s, a, ev = setup(tmp_path)
+    killed = []
+    g._info = lambda pid: {"pid": pid, "name": "suspect.exe", "created": 10.0}
+    g._terminate = lambda pid, *args: killed.append(pid)
+    p = g.propose("end_process", {"pid": 42, "name": "suspect.exe", "created": 10.0}, "scan result")
+    f = bad_file(tmp_path)
+    q = g.propose("quarantine", {"path": str(f)}, "scan result")
+
+    assert a.schedule([p, q]) == 0 and FakeTimer.made == []
+    a._fire(p["id"])
+
+    assert killed == []
+    assert f.exists()
+    assert ev[0][0] == "held"
+    assert "explicit approval" in ev[0][1]["why"]
+
+
 def test_stop_cancels(tmp_path):
     g, s, a, ev = setup(tmp_path)
     f = bad_file(tmp_path)

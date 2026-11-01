@@ -2030,60 +2030,63 @@ if AWARE_OK:
 
     _exe_safe: dict = {}
 
-    def _contain_now(kind_label: str, targets: list, reason: str, family: dict | None = None, tree: bool = True) -> list[str]:
-        """Emergency containment: no waiting, no asking. Same safety refusals as always. Everything is logged as 'VANTA (emergency)'.
-        targets: [{'pid','name','created','exe'}]. Returns plain sentences about what was done."""
-        done = []
-        expanded = []
-        for t in targets:
-            if not t.get("pid") and t.get("exe"):          # a flagged file: also stop every copy of it that is running
-                import psutil
-                for pr in psutil.process_iter(["pid", "name", "exe", "create_time"]):
-                    try:
-                        if pr.info["exe"] and os.path.normcase(pr.info["exe"]) == os.path.normcase(t["exe"]):
-                            expanded.append({"pid": pr.info["pid"], "name": pr.info["name"], "exe": t["exe"], "created": pr.info["create_time"]})
-                    except Exception:
-                        continue
-            expanded.append(t)
-        for t in expanded:
-            if guard_settings.is_trusted(str(t.get("name", "")), str(t.get("exe", ""))):
-                done.append(f"I left {t.get('name')} alone because you told me to trust it.")
+    def _processes_running_from(exe: str) -> list[dict]:
+        import psutil
+        expected = os.path.normcase(os.path.abspath(exe))
+        matches = {}
+        for proc in psutil.process_iter(["pid", "name", "exe", "create_time", "ppid"]):
+            try:
+                info = proc.info
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-            for kind, target in (("end_process", {"pid": t.get("pid"), "name": t.get("name"), "created": t.get("created"), "tree": tree}),
-                                 ("quarantine", {"path": t.get("exe", "")})):
-                if kind == "end_process" and not t.get("pid"):
-                    continue
-                if kind == "quarantine" and not Path(str(t.get("exe", ""))).is_file():
-                    continue
-                try:
-                    pr = guardian.propose(kind, target, reason)
-                    guardian.approve(pr["id"], who="VANTA (emergency)")
-                    done.append(f"Stopped {t.get('name')} and everything it started." if kind == "end_process" else f"Quarantined {Path(str(t.get('exe'))).name}.")
-                except Refused as exc:
-                    done.append(f"Couldn't {('stop ' + str(t.get('name'))) if kind == 'end_process' else 'quarantine the file'}: {exc}")
-        return done
+            running_exe = info.get("exe")
+            if running_exe and os.path.normcase(os.path.abspath(running_exe)) == expected:
+                matches[info["pid"]] = info
+        roots = [p for p in matches.values() if p.get("ppid") not in matches]
+        return [{"pid": p["pid"], "name": p.get("name") or Path(exe).name,
+                 "created": p.get("create_time"), "exe": exe, "tree": True} for p in roots]
 
-    def _announce(title: str, body: str, done: list[str], fam: dict | None) -> None:
-        extra = ("\n\nOnly thing left for you: " + fam["you"]) if (fam and fam.get("family") in ("keylogger", "infostealer", "backdoor", "banker")) else ""
-        socketio.emit("stage", guardian_stage("high", title, body + ("\n\nWhat I did: " + " ".join(done) if done else "") + extra, [], 0))
-        socketio.emit("response", {"text": f"{title}. {' '.join(done)}".strip()})
-        nudges.nudge(f"emergency:{title[:30]}", "high", title, " ".join(done)[:200] or body[:200])
+    def _process_stop_proposals(targets: list[dict], reason: str) -> tuple[list[dict], list[str]]:
+        proposals, refused = [], []
+        for target in targets:
+            if guard_settings.is_trusted(str(target.get("name", "")), str(target.get("exe", ""))):
+                continue
+            try:
+                proposals.append(guardian.propose("end_process", target, reason))
+            except Refused as exc:
+                refused.append(f"{target.get('name', 'program')}: {exc}")
+        return proposals, refused
+
+    def _announce_review(title: str, body: str, proposals: list[dict], refused: list[str] | None = None) -> None:
+        body += "\n\nI have not stopped any processes. Review the proposed action in Stage and approve it if you want me to proceed."
+        if refused:
+            body += "\n\nI could not offer these actions: " + "; ".join(refused)
+        socketio.emit("stage", guardian_stage("high", title, body, proposals, 0))
+        socketio.emit("response", {"text": f"{title}. No processes were stopped; review Stage if you want to approve an action."})
+        nudges.nudge(f"emergency:{title[:30]}", "high", title, body[:200])
         _emit_guardian_state()
+
+    def _announce(title: str, body: str, _done: list[str], _fam: dict | None) -> None:
+        _announce_review(title, body, [])
 
     def _on_ransom(writers: list, sig: dict) -> None:
         safe = []
         for w in writers:
-            # Speed matters here, so use what the background sweep already learned; never hash a program while files are burning.
+            # Use the background scan result rather than re-reading a program during an alert.
             if _exe_safe.get(str(w.get("exe") or "")) == "safe":
-                continue                                   # a verified, signed app: alert instead of killing
+                continue                                   # a verified app: alert instead of proposing a stop
             safe.append(w)
         why = ", ".join({"canary": "a decoy file was changed", "burst": f"{sig['files']} files changed in seconds", "rename": f"files renamed to {sig.get('ext') or 'a new ending'}", "notes": "ransom-style notes appeared in several folders"}[k] for k in sig["why"])
-        fam = {"you": "Disconnect from Wi-Fi, don't pay anything, and check your backups. Ask me which files changed."}
         if not safe:
-            _announce("Files are being changed very fast", f"Signs of ransomware: {why}. The program doing it looks like a verified app, so I did not stop it. Check that this is something you started.", [], fam)
+            _announce_review("Possible ransomware activity detected",
+                             f"Several ransomware-like behavior signals appeared: {why}. The likely writer is a verified app, so I did not offer to stop it.",
+                             [])
             return
-        done = _contain_now("ransomware", safe, f"ransomware behaviour: {why}")
-        _announce("I stopped something that looked like ransomware", f"Signs: {why}. Culprit: {', '.join(w['name'] for w in safe)}.", done, fam)
+        proposals, refused = _process_stop_proposals(safe, f"Possible ransomware behavior: {why}")
+        names = ", ".join(w["name"] for w in safe)
+        _announce_review("Possible ransomware activity detected",
+                         f"Several ransomware-like behavior signals appeared: {why}. Possible writer: {names}. This is not malware confirmation.",
+                         proposals, refused)
 
     def _on_ransom_unknown(sig: dict) -> None:
         _announce("Files are being changed very fast", f"Signs of ransomware ({sig['files']} files in {sig['dirs']} folders), but I couldn't tell which program is doing it, so I didn't stop anything. If you didn't start this, disconnect from Wi-Fi and shut the computer down.", [], {"you": "Disconnect from Wi-Fi and don't pay anything."})
@@ -2110,24 +2113,30 @@ if AWARE_OK:
         body = (res.get("about") or "") + ("\n\n" if res.get("about") else "") + (
             "What I found: " + "; ".join(res["reasons"]) if res["reasons"] else "No red flags found, but I couldn't confirm who made it.")
         if fam:
-            body = f"Type: {fam['family']}. {fam['does']}\n\n" + body + f"\n\nWhat to do: {fam['you']}"
-            title = f"{res['name']}: {fam['family']}"
-        if res["label"] == "dangerous" and guard_settings.data["emergency"]:
-            # Confirmed malware: stop and contain it now. No question, no waiting.
-            done = _contain_now(fam["family"] if fam else "malware", [{"name": res["name"], "exe": res["path"]}], f"{fam['family'] if fam else 'malware'} found by scan")
-            _announce(title, body.split("\n\nWhat to do:")[0], done, fam)
-            return
+            body = f"Possible type from static indicators: {fam['family']}. {fam['does']}\n\n" + body
+            title = f"{res['name']}: possible {fam['family']} indicators"
+        if res.get("publisher"):
+            body += f"\n\nVerified publisher: {res['publisher']}."
+        if res["label"] in ("dangerous", "suspicious"):
+            body += "\n\nThese are scan indicators, not confirmation of malware. No process will be stopped without your approval."
         props = []
         if res["label"] in ("dangerous", "suspicious"):
+            if res["label"] == "dangerous":
+                stop_props, refused = _process_stop_proposals(
+                    _processes_running_from(res["path"]),
+                    "; ".join(res["reasons"][:2]) or "flagged by scan")
+                props.extend(stop_props)
+            else:
+                refused = []
             try:
                 props.append(guardian.propose("quarantine", {"path": res["path"]}, "; ".join(res["reasons"][:2]) or "flagged by my scan"))
-            except Refused:
-                pass
-        secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and res.get("act") and props) else 0
+            except Refused as exc:
+                refused.append(f"Quarantine: {exc}")
+            if refused:
+                body += "\n\nSome actions were unavailable: " + "; ".join(refused)
+        secs = autopilot.schedule(props) if (autopilot.active() and res.get("act") and props) else 0
         socketio.emit("stage", guardian_stage("high" if res["label"] == "dangerous" else "medium", title, body, props, secs) if props else
                       guardian_stage("medium", title, body, []))
-        if secs:
-            autopilot.schedule(props)
         nudges.nudge(f"scan:{res['sha256'][:12]}", "high" if res["label"] == "dangerous" else "medium" if props else "low", title, (res["reasons"] or ["Couldn't verify the publisher."])[0])
         _emit_guardian_state()
 
@@ -2156,7 +2165,7 @@ if AWARE_OK:
                 activity_log.add("process", "scan_cleared", app=str(evidence.get("name", "")), title=f"{verdict['name']} checked: {'; '.join(verdict['vouched'])}"[:120])
                 return                                                           # a real, verified app: don't bother you, don't touch it
             if verdict and verdict["label"] == "dangerous" and guard_settings.data["emergency"]:
-                _on_scan(verdict)                                                    # confirmed malware: handled immediately
+                _on_scan(verdict)
                 return
             if verdict and verdict["reasons"]:
                 message += "\n\nI also looked inside the file: " + "; ".join(verdict["reasons"][:3]) + "."
@@ -2166,14 +2175,11 @@ if AWARE_OK:
                                  ("quarantine", {"path": evidence.get("exe", "")})):
                 try:
                     props.append(guardian.propose(kind, target, title))
-                except Refused:
-                    pass
+                except Refused as exc:
+                    message += f"\n\nI couldn't offer {kind}: {exc}"
         if props:
-            # Autopilot only acts on its own when my scan is confident. Unknown files are always left for you.
-            secs = int(guard_settings.data["veto_seconds"]) if (autopilot.active() and verdict and verdict.get("act")) else 0
+            secs = autopilot.schedule(props) if (autopilot.active() and verdict and verdict.get("act")) else 0
             socketio.emit("stage", guardian_stage(severity, title, message, props, secs))
-            if secs:
-                autopilot.schedule(props)
         else:
             socketio.emit("alert", {"severity": severity, "title": title, "message": message, "source": source})
         nudges.nudge(f"{source}:{title}", sev, title, message)

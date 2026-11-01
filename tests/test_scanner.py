@@ -44,6 +44,40 @@ def test_harmless_text_is_safe_and_signed_program_is_safe(tmp_path):
     assert mk(tmp_path).scan(e, force=True)["label"] == "unknown"        # unsigned, nothing known: not 'safe'
 
 
+def test_signed_binary_with_generic_browser_strings_is_not_called_malware(tmp_path):
+    p = tmp_path / "browser.exe"
+    p.write_bytes(b"MZ" + b"Login Data CreateRemoteThread IsDebuggerPresent")
+
+    r = mk(tmp_path, signature=VALID).scan(p)
+
+    assert r["label"] == "unknown"
+    assert r["family"] is None
+    assert not r["act"]
+    assert r["publisher"] == "Contoso Ltd"
+
+
+def test_default_signature_encodes_paths_safely(monkeypatch, tmp_path):
+    import subprocess
+
+    path = tmp_path / "folder with spaces" / "it's chrome.exe"
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, '{"status":"Valid","subject":"CN=Google LLC"}', "")
+
+    monkeypatch.setattr(static.subprocess, "run", fake_run)
+
+    result = static.default_signature(path)
+
+    assert result == {"status": "Valid", "publisher": "Google LLC"}
+    assert captured["args"][3] == "-EncodedCommand"
+    script = base64.b64decode(captured["args"][4]).decode("utf-16le")
+    assert str(path).replace("'", "''") in script
+    assert captured["kwargs"]["check"] is True
+
+
 def test_signature_that_fails_is_bad(tmp_path):
     e = tmp_path / "setup.exe"; e.write_bytes(b"MZ" + b"\x00" * 500)
     r = mk(tmp_path, signature=lambda p: {"status": "HashMismatch", "publisher": ""}).scan(e)

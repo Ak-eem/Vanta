@@ -68,6 +68,8 @@ class Autopilot:
         """Start the veto countdown for each proposal. Returns seconds until VANTA acts (0 if it won't)."""
         if not self.active():
             return 0
+        if any(p.get("kind") == "end_process" for p in props):
+            return 0
         secs = int(self.s.data["veto_seconds"])
         for p in props:
             t = self._timer(secs, self._fire, args=(p["id"],))
@@ -88,6 +90,9 @@ class Autopilot:
         p = self.g.pending.get(pid)
         if not p:
             return                                   # you already handled it
+        if p["kind"] == "end_process":
+            self.notify("held", {"proposal": p, "why": "Stopping a process always requires your explicit approval."})
+            return
         if not self.active():
             self.notify("held", {"proposal": p, "why": "Autopilot was switched off, so I left it for you."})
             return
