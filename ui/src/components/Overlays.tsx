@@ -1,3 +1,4 @@
+import { VoicesPanel } from './VoicesPanel'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import type { Approval, GuardianState, Nudge, PrivacyState, Project, ScanResult, SetupState, SyncState } from '../types'
@@ -70,16 +71,17 @@ export function SettingsDrawer({ open, privacy, onSource, onClose, fx, fxAuto, o
   open: boolean; privacy: PrivacyState; onSource: (k: string, v: boolean) => void; onClose: () => void
   fx: Fx; fxAuto: boolean; onFx: (v: Fx) => void
 }) {
-  const [tab, setTab] = useState<'privacy' | 'projects' | 'safety'>('privacy')
+  const [tab, setTab] = useState<'privacy' | 'voices' | 'projects' | 'safety'>('privacy')
   useEffect(() => { if (open) onOpenPanels() }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <AnimatePresence>
       {open ? (
         <motion.aside className="drawer" initial={{ x: 360 }} animate={{ x: 0 }} exit={{ x: 360 }} transition={{ type: 'tween', duration: 0.22 }} aria-label="Settings">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h3>{tab === 'privacy' ? 'What I can see' : tab === 'projects' ? 'Projects' : 'Safety log'}</h3><button className="btn ghost sm" onClick={onClose}>Close</button></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h3>{tab === 'privacy' ? 'What I can see' : tab === 'voices' ? 'Voices' : tab === 'projects' ? 'Projects' : 'Safety log'}</h3><button className="btn ghost sm" onClick={onClose}>Close</button></div>
           <div className="seg" role="tablist" aria-label="Settings sections" style={{ margin: '10px 0 14px' }}>
-            {(['privacy', 'projects', 'safety'] as const).map((t) => <button key={t} role="tab" aria-checked={tab === t} onClick={() => setTab(t)}>{t === 'privacy' ? 'General' : t === 'projects' ? 'Projects' : 'Safety'}</button>)}
+            {(['privacy', 'voices', 'projects', 'safety'] as const).map((t) => <button key={t} role="tab" aria-checked={tab === t} onClick={() => setTab(t)}>{t === 'privacy' ? 'General' : t === 'voices' ? 'Voices' : t === 'projects' ? 'Projects' : 'Safety'}</button>)}
           </div>
+          {tab === 'voices' ? <VoicesPanel /> : null}
           {tab === 'projects' ? <ProjectsPanel projects={projects} onSave={onSaveProject} onRemove={onRemoveProject} onCheck={onCheckProject} /> : null}
           {tab === 'safety' ? <SafetyPanel g={guardian} onRestore={onRestore} onMode={onGuardMode} scans={scans} onScan={onScan} onEmergency={onEmergency} onPurge={onPurge} onAgentMode={onAgentMode} /> : null}
           {tab === 'privacy' ? <>

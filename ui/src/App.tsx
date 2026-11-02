@@ -52,7 +52,11 @@ export default function App() {
 
   const stage = useMemo(() => state.stages.find((s) => s.id === state.activeStageId) ?? null, [state.stages, state.activeStageId])
   const speaker = useSpeaker(state.messages, mode === 'voice')
-  const rec = useRecorder((t) => api.send(t, mode === 'voice'), (m) => api.dispatch({ t: 'error', message: m }))
+  const rec = useRecorder((h) => {
+    const who = h.speaker
+    if (who.status === 'unknown' || who.status === 'unclear') { api.dispatch({ t: 'say', text: who.status === 'unclear' ? `That sounded a bit like ${who.name || 'someone'}, but I wasn't sure, so I ignored it.` : (who.name && !/^Unknown voice/.test(who.name)) ? `I heard ${who.name}, but I only take requests from you.` : "I heard a voice I don't know, so I ignored it.", tag: 'narration' }); return }
+    api.send(h.text, mode === 'voice', h.ticket)
+  }, (m) => api.dispatch({ t: 'error', message: m }))
   const voices = useVoices()
   const [voiceName, setVoiceName] = useState(readVoice)
   const wake = useWake(() => { if (!rec.rec && !rec.busy) rec.toggle() }, rec.rec || rec.busy || speaker.speaking || mode !== 'voice' || screen !== 'home')

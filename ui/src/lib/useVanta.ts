@@ -161,6 +161,7 @@ export function useVanta() {
     socket.on('stream_done', () => dispatch({ t: 'done' }))
     socket.on('response', (d: { text: string }) => dispatch({ t: 'say', text: d.text }))
     socket.on('narrate', (d: { text?: unknown }) => { if (typeof d?.text === 'string' && d.text.trim()) dispatch({ t: 'say', text: d.text.slice(0, 240), tag: 'narration' }) })
+    socket.on('voice_ignored', (d: { name?: string; role?: string }) => dispatch({ t: 'say', text: d?.name && !/^Unknown voice/.test(d.name) ? `I heard ${d.name}, but I only take requests from you.` : "I heard a voice I don't know, so I ignored it.", tag: 'narration' }))
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
@@ -204,11 +205,11 @@ export function useVanta() {
     return () => { window.clearInterval(timer); socket.close() }
   }, [])
 
-  const send = useCallback((text: string, voice = false) => {
+  const send = useCallback((text: string, voice = false, voice_ticket = '') => {
     const t = text.trim()
     if (!t) return
     dispatch({ t: 'user', text: t })
-    sock.current?.emit('chat', { message: t, think: false, voice })
+    sock.current?.emit('chat', { message: t, think: false, voice, ...(voice_ticket ? { voice_ticket } : {}) })
   }, [])
   const api = useMemo(() => ({
     send,
