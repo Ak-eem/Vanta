@@ -4,22 +4,329 @@
 <title>VANTA — locked</title>
 <style>
 :root{--bg:#070B14;--surface:#0E1524;--border:#1B2740;--text:#E8EEF8;--muted:#8A9AB8;--accent:#7EC8FF;--glow:#2596FF;--danger:#FF6B7A}
+@property --token-glow-angle{syntax:"<angle>";inherits:false;initial-value:0deg}
+@property --token-glow-a{syntax:"<color>";inherits:true;initial-value:#7EC8FF}
+@property --token-glow-b{syntax:"<color>";inherits:true;initial-value:#2596FF}
+@property --token-glow-c{syntax:"<color>";inherits:true;initial-value:#A6EBFF}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(60% 50% at 50% 35%,#0d1d3a 0%,var(--bg) 70%);color:var(--text);font:16px/1.5 "DM Sans",system-ui,sans-serif}
-form{width:min(92vw,360px);padding:32px;background:var(--surface);border:1px solid var(--border);border-radius:16px;text-align:center}
-.orb{width:56px;height:56px;margin:0 auto 18px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff 0%,var(--accent) 25%,var(--glow) 70%);box-shadow:0 0 40px var(--glow)}
+form{width:min(92vw,360px);padding:32px;background:transparent;border:1px solid transparent;border-radius:16px;text-align:center;box-shadow:none}
+.orb{position:relative;width:72px;height:72px;margin:0 auto 10px;transition:filter .7s ease}
+.orb.alert{--accent:#FF9BA5;--glow:#FF465D;filter:drop-shadow(0 0 8px rgba(255,70,93,.35))}
+.orb canvas,.orb-fallback{position:absolute;inset:0;width:100%;height:100%}
+.orb canvas{display:block}
+.orb .rings{position:absolute;inset:0;overflow:visible;opacity:.55}
+.orb .rings circle{fill:none;transform-box:fill-box;transform-origin:center}
+.orb .r-glow{stroke:var(--glow);stroke-width:6;opacity:.12}
+.orb .r-ticks{stroke:var(--accent);stroke-width:10;stroke-dasharray:1.2 12;opacity:.55}
+.orb .r-arcs{stroke:var(--accent);stroke-width:2;stroke-dasharray:150 90;stroke-linecap:round}
+.orb .r-arcs2{stroke:var(--glow);stroke-width:1.5;stroke-dasharray:40 140;stroke-linecap:round;opacity:.8}
+.orb .r-thin{stroke:var(--border);stroke-width:1}
+.orb .r-cross{stroke:var(--accent);stroke-width:2}
+.orb-fallback{border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff 0%,var(--accent) 25%,var(--glow) 70%);box-shadow:0 0 40px var(--glow)}
 h1{font-size:15px;letter-spacing:.3em;margin:0 0 4px;font-weight:600}
-p{margin:0 0 20px;color:var(--muted);font-size:14px}
-input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font:14px "JetBrains Mono",monospace}
-input:focus{outline:2px solid var(--glow);border-color:transparent}
-button{margin-top:12px;width:100%;padding:12px;border:0;border-radius:10px;background:var(--glow);color:#fff;font-weight:600;cursor:pointer}
+.login-message{margin:12px 0 20px;color:var(--muted);font-size:14px}
+.token-field{position:relative;isolation:isolate;width:100%;margin-top:20px;border-radius:11px;box-shadow:0 0 12px color-mix(in srgb,var(--token-glow-a) 34%,transparent),0 0 28px color-mix(in srgb,var(--token-glow-b) 20%,transparent);transition:box-shadow 1.8s ease,--token-glow-a 1.8s ease,--token-glow-b 1.8s ease,--token-glow-c 1.8s ease}
+.token-field::before{content:"";position:absolute;z-index:0;inset:-1px;padding:1.5px;border-radius:inherit;background:conic-gradient(from var(--token-glow-angle),transparent 0deg,var(--token-glow-a) 48deg,var(--token-glow-b) 112deg,var(--token-glow-c) 174deg,transparent 232deg 360deg);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;box-shadow:0 0 14px color-mix(in srgb,var(--token-glow-a) 55%,transparent);animation:token-glow-spin 8s linear infinite;transition:box-shadow 1.8s ease}
+@keyframes token-glow-spin{to{--token-glow-angle:360deg}}
+.token-field input{position:relative;z-index:1;display:block;width:100%;padding:12px 14px;border-radius:inherit;border:1px solid transparent;background:var(--bg);color:var(--text);font:14px "JetBrains Mono",monospace}
+.token-field input:focus{outline:none}
+@media(prefers-reduced-motion:reduce){.token-field,.token-field::before{animation:none!important;transition:none!important}}
+.countdown-panel{margin-top:22px}
+.countdown-panel h2{margin:0 0 8px;font-size:12px;letter-spacing:.18em;font-weight:600;color:var(--accent)}
+.countdown-panel p{margin:0 0 14px;color:var(--muted);font-size:13px}
+.countdown{display:inline-flex;align-items:center;gap:2px;color:var(--text);font:500 42px/1.15 "JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.countdown-digit{position:relative;display:inline-block;width:.68em;height:1.15em;overflow:hidden}
+.countdown-strip{position:absolute;inset:0;display:flex;flex-direction:column;transition:transform .65s cubic-bezier(.2,.7,.2,1);will-change:transform}
+.countdown-strip span{height:1.15em;flex:none;text-align:center}
+.countdown-separator{opacity:.55;padding:0 1px}
+@media(prefers-reduced-motion:reduce){.countdown-strip{transition:none}}
+button{position:relative;isolation:isolate;overflow:hidden;margin-top:12px;width:100%;padding:12px;border:1px solid color-mix(in srgb,var(--accent) 65%,transparent);border-radius:10px;background:transparent;color:var(--accent);font-weight:600;cursor:pointer;transition:color .3s ease,border-color .3s ease,box-shadow .3s ease}
+button::before{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(110deg,var(--glow),var(--accent));transform:scaleX(0);transform-origin:left;transition:transform 1s cubic-bezier(.4,0,.2,1)}
+button:hover,button:focus-visible{border-color:var(--accent);color:#fff;box-shadow:0 0 20px color-mix(in srgb,var(--glow) 42%,transparent)}
+button:hover::before,button:focus-visible::before{transform:scaleX(1)}
+@media(prefers-reduced-motion:reduce){button,button::before{transition:none}}
 .err{min-height:20px;margin-top:12px;color:var(--danger);font-size:13px}
 </style></head><body>
 <form method="post" action="/login" autocomplete="off">
-  <div class="orb"></div>
+  <div class="orb{% if error or phase in ['access_wait', 'admin_wait', 'blocked'] %} alert{% endif %}" aria-hidden="true">
+    <svg class="rings" viewBox="0 0 440 440" width="72" height="72">
+      <circle class="r-glow" cx="220" cy="220" r="214" />
+      <circle class="r-ticks" cx="220" cy="220" r="206" />
+      <circle class="r-arcs" cx="220" cy="220" r="192" />
+      <circle class="r-thin" cx="220" cy="220" r="176" />
+      <circle class="r-arcs2" cx="220" cy="220" r="184" />
+      <line class="r-cross" x1="220" y1="2" x2="220" y2="16" />
+      <line class="r-cross" x1="220" y1="2" x2="220" y2="16" transform="rotate(90 220 220)" />
+      <line class="r-cross" x1="220" y1="2" x2="220" y2="16" transform="rotate(180 220 220)" />
+      <line class="r-cross" x1="220" y1="2" x2="220" y2="16" transform="rotate(270 220 220)" />
+    </svg>
+    <div class="orb-fallback"></div><canvas id="login-sphere"></canvas>
+  </div>
   <h1>VANTA</h1>
-  <p>Enter your access token to continue.</p>
-  <input type="password" name="token" placeholder="Access token" autofocus required>
-  <button type="submit">Unlock</button>
+  {% if phase == "admin" %}
+    <p class="login-message">Admin access required.</p>
+    <div class="token-field">
+      <input type="password" name="admin_token" placeholder="Admin access token" autocomplete="off" autofocus required>
+    </div>
+    <button type="submit">Unlock VANTA</button>
+  {% elif phase == "access_wait" %}
+    <section class="countdown-panel" aria-live="polite">
+      <h2>ACCESS DENIED</h2>
+      <p>Admin access opens in</p>
+      <span class="countdown" data-deadline="{{ deadline }}" data-phase="{{ phase }}" aria-label="Countdown"></span>
+    </section>
+  {% elif phase == "admin_wait" %}
+    <section class="countdown-panel" aria-live="polite">
+      <h2>ADMIN TOKEN REJECTED</h2>
+      <p>Another check in</p>
+      <span class="countdown" data-deadline="{{ deadline }}" data-phase="{{ phase }}" aria-label="Countdown"></span>
+    </section>
+  {% elif phase == "blocked" %}
+    <section class="countdown-panel" aria-live="polite">
+      <h2>VANTA LOCKED</h2>
+      <p>Login resumes in</p>
+      <span class="countdown" data-deadline="{{ deadline }}" data-phase="{{ phase }}" aria-label="Countdown"></span>
+    </section>
+  {% else %}
+    <div class="token-field">
+      <input type="password" name="token" placeholder="Access token" autocomplete="off" autofocus required>
+    </div>
+    <button type="submit">Unlock</button>
+  {% endif %}
   <div class="err">{{ error or "" }}</div>
-</form></body></html>
+</form>
+<script>
+(() => {
+  const field = document.querySelector('.token-field');
+  if (!field || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const palette = ['#7EC8FF', '#2596FF', '#A6EBFF', '#7B8CFF', '#62E6D3', '#B6A0FF', '#4BB8FF'];
+  let previous = -1;
+  let timer;
+  const cycleColors = () => {
+    let next = Math.floor(Math.random() * palette.length);
+    if (next === previous) next = (next + 1 + Math.floor(Math.random() * (palette.length - 1))) % palette.length;
+    previous = next;
+    field.style.setProperty('--token-glow-a', palette[next]);
+    field.style.setProperty('--token-glow-b', palette[(next + 2) % palette.length]);
+    field.style.setProperty('--token-glow-c', palette[(next + 4) % palette.length]);
+    timer = window.setTimeout(cycleColors, 2200 + Math.random() * 2400);
+  };
+  cycleColors();
+  window.addEventListener('pagehide', () => window.clearTimeout(timer), { once: true });
+})();
+</script>
+<script>
+(() => {
+  const counter = document.querySelector('.countdown');
+  if (!counter) return;
+  const deadline = Number(counter.dataset.deadline) * 1000;
+  let slots = [];
+
+  function displayValue(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  function render(value) {
+    const characters = displayValue(value);
+    if (slots.length !== characters.length) {
+      counter.replaceChildren();
+      slots = [...characters].map((character) => {
+        if (character === ':') {
+          const separator = document.createElement('span');
+          separator.className = 'countdown-separator';
+          separator.textContent = character;
+          counter.append(separator);
+          return null;
+        }
+        const digit = document.createElement('span');
+        digit.className = 'countdown-digit';
+        const strip = document.createElement('span');
+        strip.className = 'countdown-strip';
+        for (let cycle = 0; cycle < 3; cycle++) {
+          for (let n = 0; n < 10; n++) {
+            const numeral = document.createElement('span');
+            numeral.textContent = String(n);
+            strip.append(numeral);
+          }
+        }
+        digit.append(strip);
+        counter.append(digit);
+        const initial = Number(character);
+        strip.style.transform = `translateY(-${(initial + 10) * 1.15}em)`;
+        return { strip, position: initial + 10, resetTimer: 0 };
+      });
+    }
+    [...characters].forEach((character, index) => {
+      const slot = slots[index];
+      if (!slot) return;
+      const target = Number(character);
+      let step = (target - slot.position % 10 + 10) % 10;
+      if (step > 5) step -= 10;
+      slot.position += step;
+      slot.strip.style.transform = `translateY(-${slot.position * 1.15}em)`;
+      window.clearTimeout(slot.resetTimer);
+      if (slot.position < 10 || slot.position >= 20) {
+        slot.resetTimer = window.setTimeout(() => {
+          const digit = (slot.position % 10 + 10) % 10;
+          slot.position = 10 + digit;
+          slot.strip.style.transition = 'none';
+          slot.strip.style.transform = `translateY(-${slot.position * 1.15}em)`;
+          slot.strip.offsetHeight;
+          slot.strip.style.transition = '';
+        }, 680);
+      }
+    });
+    const minutes = Math.floor(value / 60);
+    const seconds = value % 60;
+    counter.setAttribute('aria-label', `${minutes} minutes ${seconds} seconds remaining`);
+  }
+
+  let last = -1;
+  let timer = 0;
+  const update = () => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    if (remaining !== last) {
+      last = remaining;
+      render(remaining);
+    }
+    if (remaining === 0) {
+      window.clearInterval(timer);
+      window.location.reload();
+    }
+  };
+  update();
+  if (last > 0) timer = window.setInterval(update, 200);
+  window.addEventListener('pagehide', () => {
+    window.clearInterval(timer);
+    slots.forEach((slot) => {
+      if (slot) window.clearTimeout(slot.resetTimer);
+    });
+  }, { once: true });
+})();
+</script>
+<script src="/static/vendor/three.r128.min.js"></script>
+<script>
+(() => {
+  const canvas = document.getElementById('login-sphere');
+  const alertState = document.querySelector('.orb').classList.contains('alert');
+  const sphereColor = alertState ? '#FFB0B8' : '#7EC8FF';
+  const sphereGlow = alertState ? '#FF465D' : '#2596FF';
+  const fallback = document.querySelector('.orb-fallback');
+  try {
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(72, 72, false);
+    renderer.setClearColor(0x000000, 0);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20);
+    camera.position.z = 4.1;
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const vertexShader = `
+      uniform float uTime, uPixel, uSize, uBase;
+      attribute float aSeed;
+      varying float vDepth, vTwinkle;
+      void main() {
+        vec3 p = position;
+        float breath = 1.0 + sin(uTime * 0.8) * 0.02;
+        float wobble = sin(uTime * 1.3 + aSeed * 40.0) * 0.01;
+        p *= breath + wobble;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vDepth = clamp((-mv.z - 2.2) / 2.6, 0.0, 1.0);
+        vTwinkle = 0.75 + 0.25 * sin(uTime * 2.0 + aSeed * 120.0);
+        gl_PointSize = uSize * uPixel * (1.0 - 0.4 * vDepth) * (4.1 / max(0.5, -mv.z)) * 1.35;
+        gl_Position = projectionMatrix * mv;
+      }`;
+    const fragmentShader = `
+      uniform vec3 uColor, uGlow;
+      varying float vDepth, vTwinkle;
+      void main() {
+        float d = length(gl_PointCoord - 0.5) * 2.0;
+        float soft = smoothstep(1.0, 0.0, d);
+        soft *= soft;
+        vec3 col = mix(uColor, uGlow, vDepth * 0.85);
+        float a = clamp(soft * (1.0 - 0.6 * vDepth) * vTwinkle * 1.9, 0.0, 1.0);
+        gl_FragColor = vec4(col, a);
+      }`;
+
+    function shell(count, radius, jitter) {
+      const positions = new Float32Array(count * 3);
+      const seeds = new Float32Array(count);
+      const golden = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < count; i++) {
+        const y = 1 - (i / (count - 1)) * 2;
+        const r = Math.sqrt(1 - y * y);
+        const theta = golden * i;
+        const size = radius * (1 + (Math.random() - 0.5) * jitter);
+        positions.set([Math.cos(theta) * r * size, y * size, Math.sin(theta) * r * size], i * 3);
+        seeds[i] = Math.random();
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+      return geometry;
+    }
+
+    for (const [geometry, size, base] of [[shell(1100, 1, 0.04), 2.1, 1], [shell(420, 1.38, 0.18), 1.5, 0.45]]) {
+      const material = new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uTime: { value: 0 },
+          uPixel: { value: renderer.getPixelRatio() },
+          uSize: { value: size },
+          uBase: { value: base },
+          uColor: { value: new THREE.Color(sphereColor) },
+          uGlow: { value: new THREE.Color(sphereGlow) },
+        },
+      });
+      group.add(new THREE.Points(geometry, material));
+    }
+
+    fallback.hidden = true;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let frame = 0;
+    let running = false;
+    const start = () => {
+      if (running) return;
+      running = true;
+      const render = (now) => {
+        if (!running) return;
+        const time = now * 0.001;
+        group.rotation.y = time * (reducedMotion ? 0.015 : 0.1);
+        group.rotation.x = Math.sin(time * 0.25) * (reducedMotion ? 0.018 : 0.12);
+        group.children.forEach((points) => {
+          points.material.uniforms.uTime.value = time * (reducedMotion ? 0.15 : 1);
+        });
+        renderer.render(scene, camera);
+        frame = requestAnimationFrame(render);
+      };
+      frame = requestAnimationFrame(render);
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(frame);
+    };
+    document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
+    window.addEventListener('pagehide', () => {
+      stop();
+      group.traverse((object) => {
+        if (object instanceof THREE.Points) object.geometry.dispose();
+      });
+      group.children.forEach((points) => points.material.dispose());
+      renderer.dispose();
+    }, { once: true });
+    start();
+  } catch (error) {
+    console.warn('VANTA sphere animation could not start; showing the static sphere instead.', error);
+  }
+})();
+</script>
+</body></html>

@@ -8,5 +8,9 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/500.css'
 import './styles.css'
 import App from './App'
+import BorderGlowPreview from './designs/BorderGlowPreview'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+const designPreview = new URLSearchParams(window.location.search).get('design') === 'border-glow'
+const Root = designPreview ? BorderGlowPreview : App
+
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><Root /></React.StrictMode>)

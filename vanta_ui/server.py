@@ -1055,6 +1055,8 @@ def _run_legal_draft(sid: str, pending: dict):
 
 def _is_authed() -> bool:
     """Logged-in browser session, or a valid token supplied with the request."""
+    if auth.lockout_enabled() and auth.login_state()["phase"] == "blocked":
+        return False
     if session.get("vanta_auth") is True:
         return True
     header = request.headers.get("Authorization", "")
@@ -2288,16 +2290,48 @@ def start_awareness(port: int) -> None:
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
-        return render_template("login.html", error=None)
+        return _render_login()
+
+    if auth.lockout_enabled():
+        phase = auth.login_state()["phase"]
+        if phase == "access":
+            if auth.check(request.form.get("token")):
+                return _complete_login()
+            auth.start_access_wait()
+            return _render_login(status=401)
+        if phase == "admin":
+            if auth.check_admin(request.form.get("admin_token")):
+                return _complete_login()
+            auth.start_admin_wait()
+            return _render_login(status=401)
+        return _render_login(status=429)
+
     client = request.remote_addr or "?"
     if auth.throttled(client):
-        return render_template("login.html", error="Too many attempts. Wait a few minutes."), 429
+        return _render_login(error="Too many attempts. Wait a few minutes.", status=429)
     if auth.check(request.form.get("token")):
-        session.clear()
-        session["vanta_auth"] = True
-        return redirect("/")
+        return _complete_login()
     auth.record_fail(client)
-    return render_template("login.html", error="That token isn't right."), 401
+    return _render_login(error="That token isn't right.", status=401)
+
+
+def _render_login(error: str | None = None, status: int = 200):
+    state = auth.login_state()
+    response = render_template(
+        "login.html",
+        error=error,
+        phase=state["phase"],
+        deadline=state["deadline"] or 0,
+        remaining=state["remaining"],
+    )
+    return response, status
+
+
+def _complete_login():
+    auth.clear_login_state()
+    session.clear()
+    session["vanta_auth"] = True
+    return redirect("/")
 
 
 @app.route("/logout")
@@ -2427,7 +2461,7 @@ if __name__ == "__main__":
     print(f"  http://localhost:{port}")
     print(f"  RAG: {'✓' if RAG_OK else '✗'}  Google: {'✓' if GOOGLE_OK else '✗'}  Orch: {'✓' if ORCH_OK else '✗'}  Watcher: {'✓' if WATCHER_OK else '✗'}")
     print(f"{'='*55}")
-    print(f"  Access token: {auth.get_token()}   (stored in {auth.TOKEN_FILE})")
+    print("  Access token is configured locally.")
     print(f"{'='*55}\n")
 
     if WATCHER_OK:
