@@ -126,14 +126,14 @@
   .demo-btn:hover { border-color: var(--blue-accent); }
   #demo-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 
-  #voice-shelf { position: absolute; bottom: 0; left: 0; right: 0; border-top: 1px solid var(--border-blue); background: #03080f; padding: 14px 20px; transform: translateY(100%); transition: transform 0.45s cubic-bezier(.2,.8,.3,1); }
+  #voice-shelf { position: absolute; bottom: 0; left: 0; right: 0; border-top: 1px solid var(--border-blue); background: #03080f; padding: 14px 20px; transform: translateY(100%); transition: transform 0.45s cubic-bezier(.2,.8,.3,1); pointer-events: none; }
   #voice-shelf.open { transform: translateY(0); }
 
   #big-visual { position: absolute; inset: 14px; border-radius: 10px; overflow: hidden; background: #0a1410; opacity: 0; pointer-events: none; transition: opacity 0.5s ease; }
   #close-map-btn { position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; }
 
   #sphere-wrap { position: absolute; display: flex; flex-direction: column; align-items: center; z-index: 5; filter: brightness(1.28) drop-shadow(0 0 12px rgba(0,229,255,0.38)) drop-shadow(0 0 30px rgba(0,180,255,0.16)); transition: left 0.6s cubic-bezier(.3,.7,.3,1), top 0.6s cubic-bezier(.3,.7,.3,1), width 0.6s cubic-bezier(.3,.7,.3,1), height 0.6s cubic-bezier(.3,.7,.3,1); }
-  #sphere-wrap.pos-voice { left: 50%; top: 42%; width: 190px; height: 190px; transform: translate(-50%,-50%); }
+  #sphere-wrap.pos-voice { left: 50%; top: 42%; width: 190px; height: 190px; transform: translate(-50%,-50%); pointer-events: none; }
   #sphere-wrap.pos-pill { left: 9%; top: 89%; width: 44px; height: 44px; transform: translate(-50%,-50%); }
   #sphere-canvas { display: block; width: 100%; height: 100%; }
 

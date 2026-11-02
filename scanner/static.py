@@ -1,6 +1,7 @@
 """Static inspection: hashes, file type, tricks, suspicious strings, signature. Never executes the file."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -21,16 +22,16 @@ MAX_READ = 8 * 1024 * 1024
 INDICATORS: list[tuple[str, int, str, str]] = [
     ("ps_encoded", 25, r"powershell[^\n]{0,40}\s-e(nc|ncodedcommand)?\s", "Runs hidden, scrambled PowerShell commands"),
     ("download_exec", 25, r"(certutil[^\n]{0,30}-urlcache|bitsadmin[^\n]{0,30}/transfer|Invoke-WebRequest|DownloadString|DownloadFile)", "Downloads more code from the internet"),
-    ("inject", 30, r"(CreateRemoteThread|WriteProcessMemory|VirtualAllocEx|NtUnmapViewOfSection|QueueUserAPC)", "Can inject code into other programs"),
+    ("inject", 30, r"(CreateRemoteThread|WriteProcessMemory|VirtualAllocEx|NtUnmapViewOfSection|QueueUserAPC)", "Contains process-injection API names (string match only)"),
     ("keylog", 30, r"(SetWindowsHookEx|GetAsyncKeyState|GetKeyboardState)", "Can record what you type"),
     ("miner", 35, r"(stratum\+tcp|xmrig|cryptonight|monero|minerd)", "Looks like a crypto miner"),
-    ("stealer", 35, r"(Login Data|Web Data|cookies\.sqlite|leveldb|discord(canary|ptb)?[\\/]+Local Storage|wallet\.dat|\.metamask)", "Reads browser or wallet data"),
+    ("stealer", 35, r"(Login Data|Web Data|cookies\.sqlite|leveldb|discord(canary|ptb)?[\\/]+Local Storage|wallet\.dat|\.metamask)", "Contains browser or wallet data identifiers (string match only)"),
     ("persist", 15, r"(schtasks[^\n]{0,20}/create|CurrentVersion\\Run|Startup\\)", "Installs itself to start automatically"),
     ("defender_off", 35, r"(Set-MpPreference[^\n]{0,40}Disable|DisableRealtimeMonitoring|DisableAntiSpyware|netsh advfirewall[^\n]{0,30}off)", "Tries to switch off your antivirus or firewall"),
     ("shadow_del", 40, r"(vssadmin[^\n]{0,20}delete shadows|wbadmin delete|bcdedit[^\n]{0,30}recoveryenabled)", "Deletes backups (typical of ransomware)"),
     ("ransom_note", 35, r"(your files (have been|are) encrypted|decrypt your files|bitcoin address|\.onion)", "Contains ransom-style text"),
     ("screen_cap", 12, r"(BitBlt|GetDesktopWindow|PrintWindow)", "Can take screenshots"),
-    ("anti_vm", 15, r"(VBoxService|VMwareTray|SbieDll|IsDebuggerPresent|vmware|qemu)", "Checks whether it is being analysed"),
+    ("anti_vm", 15, r"(VBoxService|VMwareTray|SbieDll|IsDebuggerPresent|vmware|qemu)", "Contains anti-analysis API or platform names (string match only)"),
     ("tor_c2", 15, r"(torproject|onion-?routing|ngrok\.io|pastebin\.com/raw|api\.telegram\.org/bot)", "Talks to anonymous or chat-bot servers"),
     ("obf_eval", 15, r"(eval\(\s*(atob|unescape|base64)|FromBase64String|\[Convert\]::FromBase64|fromCharCode\(\s*\d+\s*,)", "Hides its real code with encoding"),
 ]
@@ -77,14 +78,17 @@ def default_signature(path: Path) -> Optional[dict]:
     """Windows only. Returns {status, publisher} or None when it can't be checked."""
     if sys.platform != "win32":
         return None
-    cmd = ("$s=Get-AuthenticodeSignature -LiteralPath $args[0]; "
+    escaped_path = str(path).replace("'", "''")
+    cmd = ("$s=Get-AuthenticodeSignature -LiteralPath '" + escaped_path + "'; "
            "[pscustomobject]@{status=[string]$s.Status;subject=[string]$s.SignerCertificate.Subject}|ConvertTo-Json -Compress")
+    encoded = base64.b64encode(cmd.encode("utf-16le")).decode("ascii")
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd, str(path)], capture_output=True, text=True, timeout=20).stdout
-        j = json.loads(out)
+        result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                                capture_output=True, text=True, timeout=20, check=True)
+        j = json.loads(result.stdout)
         m = re.search(r"CN=([^,]+)", j.get("subject") or "")
         return {"status": j.get("status", "Unknown"), "publisher": m.group(1).strip('" ') if m else ""}
-    except Exception:
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, AttributeError):
         return None
 
 
