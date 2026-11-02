@@ -31,7 +31,8 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import sandbox
-from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage
+from vanta_ui.voicestyle import apply_voice
+from vanta_ui.stage import STAGE_PROMPT, wants_stage, parse_model_stage, code_result_stage, guardian_stage, doctor_stage, agent_stage, build_stage, orchestra_stage, report_stage, report_markdown
 from utils.commands import parse_run_command  # re-added — this got dropped
                                                # from the imports somewhere
                                                # along the way, which is what
@@ -117,6 +118,13 @@ MAX_HIST   = 14
 Path(WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
 
 client = Groq(api_key=GROQ_API_KEY)
+
+try:
+    from voiceid.service import VoiceService
+    VOICE = VoiceService(Path.home() / ".vanta", FLASK_SECRET)
+except Exception as _exc:  # voice recognition is optional
+    print(f"Voice recognition unavailable: {_exc}")
+    VOICE = None
 if ORCH_OK:
     orchestrator = VantaOrchestrator(client, MODEL)
 if MEMORY_OK:
@@ -494,11 +502,14 @@ def _extract_city(msg: str) -> str | None:
     return None
 
 def get_weather(msg: str) -> str:
-    if not WEATHER_API_KEY or _offline():
+    if _offline():
         return ""
     city = _extract_city(msg)
     if not city:
         return ""
+    if not WEATHER_API_KEY:                      # no OpenWeather key: use the free Open-Meteo service
+        w = weather_cache.get(city)
+        return _weather_sentence(w) if w else ""
     try:
         url = ("https://api.openweathermap.org/data/2.5/weather?"
                + _urlparse.urlencode({"q": city, "appid": WEATHER_API_KEY, "units": "metric"}))
@@ -517,6 +528,12 @@ def get_weather(msg: str) -> str:
         return ""
 
 DEFAULT_CITY = os.environ.get("VANTA_DEFAULT_CITY", "Lagos")
+from utils.weather import WeatherCache
+weather_cache = WeatherCache()
+
+
+def _weather_sentence(w: dict) -> str:
+    return f"Current weather in {w['city']}: {w['temp']}°C (feels like {w['feels']}°C), {w['desc'].lower()}, {w['humidity']}% humidity." + (f" {w['hint']}" if w.get("hint") else "")
 
 def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
     if _offline():
@@ -527,7 +544,8 @@ def get_weather_card(city: str = DEFAULT_CITY) -> dict | None:
     None on any failure so the frontend can show 'unavailable' honestly
     rather than display stale fake numbers."""
     if not WEATHER_API_KEY:
-        return None
+        w = weather_cache.get(city)
+        return {"temp": w["temp"], "condition": w["desc"].upper(), "city": w["city"]} if w else None
     try:
         url = ("https://api.openweathermap.org/data/2.5/weather?"
                + _urlparse.urlencode({"q": city, "appid": WEATHER_API_KEY, "units": "metric"}))
@@ -1079,11 +1097,7 @@ def on_connect():
     emit("status",    {"state": "idle"})
     emit("workspace", {"path": WORKSPACE})
     sid = request.sid
-    def _send_weather():
-        card = get_weather_card()
-        if card:
-            socketio.emit("weather_card", card, room=sid)
-    socketio.start_background_task(_send_weather)
+    # The dashboard's Weather card (weather_state) replaces the old pop-up stage that used to appear on connect.
     _emit_setup_state(sid)
 
 @socketio.on("disconnect")
@@ -1091,6 +1105,8 @@ def on_disconnect():
     conversations.pop(request.sid, None)
     awake_sessions.pop(request.sid, None)
     checklist_pending.pop(request.sid, None)
+    if board is not None:
+        board.watch(request.sid, False)
 
 def _guard_chat_handler(handler):
     def guarded(data):
@@ -1114,9 +1130,26 @@ def handle_chat(data):
     sid  = request.sid
     msg  = data.get("message", "").strip()
     think_mode = bool(data.get("think", False))
+    voice_reply = bool(data.get("voice", False))
     print(f"🔵 handle_chat received: {msg[:60]!r}")
     if not msg:
         return
+
+    # ── Who is speaking? Typed messages come from the logged-in owner; spoken ones carry a signed voice ticket ──
+    voice_ticket = data.get("voice_ticket")
+    if voice_ticket and VOICE is not None:
+        who = VOICE.check(str(voice_ticket), msg)
+        if who is None:
+            socketio.emit("response", {"text": "I couldn't confirm who said that, so I ignored it."}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+            return
+        if who["role"] == "guest":
+            _guest_chat(sid, msg, who["name"])
+            return
+        if who["role"] != "owner":
+            socketio.emit("voice_ignored", {"name": who["name"], "role": who["role"]}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+            return
 
     # ── Wake-word gate ──────────────────────────────────────────────────────
     if msg.lower() in ("sleep", "go to sleep"):
@@ -1136,6 +1169,10 @@ def handle_chat(data):
             socketio.emit("response", {"text": "⚡ I'm awake. What do you need?"}, room=sid)
             return
 
+    if AWARE_OK and _system_command(sid, msg):
+        return
+    if _report_command(sid, msg):
+        return
     if SETUPS_OK:
         if _setup_command(sid, msg):
             return
@@ -1235,7 +1272,7 @@ def handle_chat(data):
     if SETUPS_OK and setup_store.profile["effort"]:
         effort = setup_store.profile["effort"]          # Think with me: always the deepest thinking
     routed_model = pick_model(effort)
-    messages = build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort)
+    messages = apply_voice(build_prompt(sid, msg, mode, rag_ctx, weather_ctx or google_ctx, effort), voice_reply)
     if SETUPS_OK and setup_store.profile["overlay"]:
         messages[0]["content"] += "\n\n" + setup_store.profile["overlay"]
     if wants_stage(msg):
@@ -1394,12 +1431,245 @@ def _run_build(sid: str, goal: str) -> None:
         socketio.emit("status", {"state": "idle"}, room=sid)
 
 
+def _run_orchestra(sid: str, goal: str, root: Path) -> None:
+    """A strong manager splits the goal; small agents do the jobs with the real tools. Every approval is still a pop-up you answer."""
+    try:
+        strong, fast = router.pair()
+    except Unavailable as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    holder: dict = {}
+    mode = guard_settings.data.get("agent_mode", "ask")
+
+    def push(run):
+        socketio.emit("stage", orchestra_stage(run, run.status in ("planning", "running")), room=sid)
+
+    o = Orchestra(strong, fast, root, mode, approve=lambda a, d: request_approval(sid, a, d),
+                  web_search=(lambda q: get_google(q)) if GOOGLE_OK else None, on_update=push)
+    orchs[o.run_.id] = o
+    socketio.emit("status", {"state": "thinking", "message": "The team is working…"}, room=sid)
+    try:
+        run = o.run(goal)
+        guardian.audit.add("team_run", run.id, goal=goal[:100], status=run.status, changed=run.changed, mode=mode)
+        socketio.emit("response", {"text": run.final or "Finished."}, room=sid)
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The team hit a problem: {exc}"}, room=sid)
+    finally:
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+REPORT_RE = re.compile(r"^\s*(?:/report\s+|(?:please\s+)?(?:make|write|build|do|give me|create)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:research\s+)?report\s+(?:on|about)\s+|(?:please\s+)?research\s+)(.{3,200}?)\s*[.!?]*\s*$", re.I)
+reports: dict = {}
+
+
+def _run_report(sid: str, topic: str) -> None:
+    """Searches, reads, checks and writes a report in the background. Needs the internet; works with whatever models the setup gives."""
+    from research.engine import Researcher
+    from research.search import chain, ddg_results, fetch_page
+    try:
+        strong, fast = router.pair() if SETUPS_OK else (lambda m: call_once(m, "CODE", max_tok=1500, temp=0.2), lambda m: call_once(m, "CODE", max_tok=900, temp=0.1))
+    except Exception as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    import time as _t
+    from research.narrate import Narrator
+    narrator = Narrator(fast, lambda line: socketio.emit("narrate", {"text": line}, room=sid), _t.time)
+
+    def _update(run):
+        socketio.emit("stage", report_stage(run, run.status == "running"), room=sid)
+        narrator.observe(run)
+    rs = Researcher(strong, fast, chain(ddg_results), fetch_page, clock=_t.time, on_update=_update)
+    live_reports[sid + str(id(rs))] = rs
+    socketio.emit("status", {"state": "thinking", "message": "Researching…"}, room=sid)
+    try:
+        run = rs.run(topic)
+        reports[run.id] = run
+        if AWARE_OK:
+            guardian.audit.add("report_run", run.id, topic=topic[:100], status=run.status, sources=len(run.sources), facts=len(run.facts), dropped=run.dropped)
+        closing = narrator.finish(run)
+        text = closing or (f"Your report on {run.title} is ready on the stage: {len(run.sources)} sources, {len(run.facts)} checked facts." if run.status == "done" else run.note or "The report didn't finish.")
+        socketio.emit("response", {"text": text}, room=sid)
+        if nudges and run.status == "done":
+            nudges.nudge(f"report:{run.id}", "low", "Report ready", f"{run.title}: {len(run.facts)} checked facts from {len(run.sources)} sources.")
+    except Exception as exc:
+        socketio.emit("response", {"text": f"The research hit a problem: {exc}"}, room=sid)
+    finally:
+        live_reports.pop(sid + str(id(rs)), None)
+        socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _report_command(sid: str, msg: str) -> bool:
+    m = REPORT_RE.match(msg)
+    if not m:
+        return False
+    if _offline():
+        socketio.emit("response", {"text": "Offline mode is on, so I can't search the web. Switch to another setup and ask again."}, room=sid)
+        return True
+    topic = m.group(1).strip()
+    socketio.emit("response", {"text": f"On it. I'll search, read the pages, check every fact, and put the report on the stage. You can walk away; I'll nudge you when it's ready."}, room=sid)
+    threading.Thread(target=_run_report, args=(sid, topic), daemon=True).start()
+    return True
+
+
 def _run_probe(sid: str) -> None:
     socketio.emit("response", {"text": "Testing this computer's disk, memory and processor. About 20 seconds."}, room=sid)
     try:
         socketio.emit("response", {"text": hw_describe(hw_probe())}, room=sid)
     except Exception as exc:
         socketio.emit("response", {"text": f"The speed test failed: {exc}"}, room=sid)
+
+
+def _system_command(sid: str, msg: str) -> bool:
+    """'how is my laptop', 'close chrome', 'uninstall X'. Only handled when a real program matches; otherwise normal chat."""
+    if board is None:
+        return False
+    from vanta_ui import board as B
+    cmd = B.parse(msg)
+    if not cmd:
+        return False
+    kind, target = cmd
+    if kind == "weather":
+        socketio.emit("hw_focus", {"card": "weather"}, room=sid)
+        if target:
+            on_weather_get_for(sid, target)
+        return True
+    if kind == "focus":
+        socketio.emit("hw_focus", {"card": target}, room=sid)
+        socketio.emit("response", {"text": "Here it is on the dashboard."}, room=sid)
+        return True
+    if kind == "status":
+        from awareness.hardware import describe
+        socketio.emit("response", {"text": describe(board.state())}, room=sid)
+        return True
+    if kind == "end":
+        hits = B.match_running([g for g in board.hw.slow(True)["programs"]], target)
+        if not hits:
+            return False
+        threading.Thread(target=_end_program, args=(sid, hits[0]), daemon=True).start()
+        return True
+    if kind == "uninstall":
+        hits = B.prog.find(board.programs(True), target)
+        if not hits:
+            return False
+        if len(hits) > 1:
+            socketio.emit("response", {"text": "Which one? " + ", ".join(h["name"] for h in hits[:5])}, room=sid)
+            return True
+        threading.Thread(target=_uninstall_program, args=(sid, hits[0]["id"]), daemon=True).start()
+        return True
+    return False
+
+
+def _end_program(sid: str, g: dict) -> None:
+    """Ask first, then stop the program and everything it started. Every step is in the audit log."""
+    try:
+        pr = guardian.propose("end_process", {"pid": g["pid"], "name": g["name"], "created": g["created"], "tree": True}, f"You asked me to stop {g['name']}.")
+    except Refused as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    more = f" ({g['count']} parts)" if g.get("count", 1) > 1 else ""
+    if not request_approval(sid, "Stop program", f"Stop {g['name']}{more} and anything it started. Unsaved work in it will be lost."):
+        guardian.deny(pr["id"])
+        socketio.emit("response", {"text": f"Okay, I left {g['name']} running."}, room=sid)
+        return
+    try:
+        guardian.approve(pr["id"])
+        socketio.emit("response", {"text": f"Stopped {g['name']}."}, room=sid)
+    except Refused as exc:
+        socketio.emit("response", {"text": f"I couldn't stop {g['name']}: {exc}"}, room=sid)
+    _emit_guardian_state()
+
+
+def _uninstall_program(sid: str, prog_id: str) -> None:
+    entry = next((p for p in board.programs() if p["id"] == prog_id), None)
+    name = entry["name"] if entry else "that program"
+    try:
+        pr = guardian.propose("uninstall", {"id": prog_id, "name": name}, f"You asked me to uninstall {name}.")
+    except Refused as exc:
+        socketio.emit("response", {"text": str(exc)}, room=sid)
+        return
+    if not request_approval(sid, "Uninstall program", f"Uninstall {name}. I'll start its own uninstaller, which shows its own window so you can still cancel there."):
+        guardian.deny(pr["id"])
+        socketio.emit("response", {"text": f"Okay, {name} stays installed."}, room=sid)
+        return
+    try:
+        guardian.approve(pr["id"])
+        socketio.emit("response", {"text": f"Started the uninstaller for {name}. Finish it in the window that just opened."}, room=sid)
+        board.programs(True)
+    except Refused as exc:
+        socketio.emit("response", {"text": f"I couldn't uninstall {name}: {exc}"}, room=sid)
+    _emit_guardian_state()
+
+
+@socketio.on("weather_get")
+def on_weather_get(data):
+    if _offline():
+        emit("weather_state", {"error": "Offline mode is on, so I didn't look up the weather."})
+        return
+    city = str((data or {}).get("city") or DEFAULT_CITY).strip()[:60] or DEFAULT_CITY
+    sid = request.sid
+
+    def work():
+        w = weather_cache.get(city)
+        socketio.emit("weather_state", w or {"error": f"I couldn't get the weather for {city}."}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def on_weather_get_for(sid: str, city: str) -> None:
+    def work():
+        w = weather_cache.get(city)
+        socketio.emit("weather_state", w or {"error": f"I couldn't get the weather for {city}."}, room=sid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _files_state():
+    from utils import vanta_files
+    return {"folder": str(vanta_files.folder()), "files": vanta_files.listing()}
+
+
+@socketio.on("files_get")
+def on_files_get():
+    emit("files_state", _files_state())
+
+
+@app.route("/files/<path:name>")
+def download_file(name):
+    from flask import send_from_directory
+    from utils import vanta_files
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    p = vanta_files.resolve(name)
+    if not p:
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(p.parent, p.name, as_attachment=True)
+
+
+@socketio.on("hw_watch")
+def on_hw_watch(data):
+    if board is None:
+        return
+    on = bool((data or {}).get("on", True))
+    board.watch(request.sid, on)
+    if on:
+        emit("hw_state", board.state())
+
+
+@socketio.on("hw_end")
+def on_hw_end(data):
+    if board is None:
+        return
+    pid = int((data or {}).get("pid") or 0)
+    g = next((x for x in board.hw.slow(True)["programs"] if x["pid"] == pid), None)
+    if not g:
+        emit("response", {"text": "That program has already closed."})
+        return
+    threading.Thread(target=_end_program, args=(request.sid, g), daemon=True).start()
+
+
+@socketio.on("hw_uninstall")
+def on_hw_uninstall(data):
+    if board is None:
+        return
+    threading.Thread(target=_uninstall_program, args=(request.sid, str((data or {}).get("id", ""))), daemon=True).start()
 
 
 def _setup_command(sid: str, msg: str) -> bool:
@@ -1417,6 +1687,16 @@ def _setup_command(sid: str, msg: str) -> bool:
         return True
     if re.match(r"^\s*(?:/probe|speed test|test (?:my|this) (?:laptop|computer|pc))\b", msg, re.I):
         threading.Thread(target=_run_probe, args=(sid,), daemon=True).start()
+        return True
+    tm = re.match(r"^\s*/team\s+(.+)", msg, re.I | re.S)
+    if not tm and setup_store.current == "orchestra" and AWARE_OK:
+        tm = re.match(r"^\s*((?:please\s+)?(?:fix|build|add|make|find|check|review|refactor|update|write|investigate|implement|clean up|improve|debug)\b.+)", msg, re.I | re.S)
+    if tm and AWARE_OK:
+        goal = tm.group(1).strip()
+        hit = projects_db.mentioned_in(goal)
+        root = Path(hit[0]["folder"]) if hit and hit[0].get("folder") and Path(hit[0]["folder"]).is_dir() else Path(WORKSPACE)
+        socketio.emit("response", {"text": f"On it. A strong model will split this up and small agents will do the parts, in {root.name} ({guard_settings.data.get('agent_mode', 'ask')} mode). Say stop any time, and I can undo their changes."}, room=sid)
+        threading.Thread(target=_run_orchestra, args=(sid, goal, root), daemon=True).start()
         return True
     bm = re.match(r"^\s*/build\s+(.+)", msg, re.I | re.S)
     if not bm and setup_store.current == "builder":
@@ -1543,6 +1823,29 @@ def on_stage_action(data):
             if AWARE_OK:
                 guardian.audit.add("build_undo", rid, files=back)
             socketio.emit("response", {"text": f"Undone. I removed or restored {len(back)} file(s)."}, room=sid)
+        return
+    if SETUPS_OK and AWARE_OK and action.startswith("team:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        o = orchs.get(rid)
+        if verb == "stop" and o:
+            o.stop()
+        elif verb == "undo" and o:
+            back = o.rewind()
+            guardian.audit.add("team_undo", rid, files=back)
+            socketio.emit("response", {"text": f"Undone. I put back {len(back)} file(s) exactly as they were."}, room=sid)
+        return
+    if action.startswith("report:"):
+        _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
+        run = reports.get(rid)
+        if verb == "stop":
+            for rs in list(live_reports.values()):
+                if rs.r and rs.r.id == rid:
+                    rs.stop()
+        elif verb == "save" and run:
+            from utils import vanta_files
+            p = vanta_files.save_bytes(re.sub(r"[^\w ]", "", run.title)[:40].strip().replace(" ", "-") + "-report.md", report_markdown(run).encode("utf-8"))
+            socketio.emit("files_state", _files_state(), room=sid)
+            socketio.emit("response", {"text": f"Saved {p.name} in your VANTA folder. You can download it from the dashboard."}, room=sid)
         return
     if AWARE_OK and action.startswith("agent:"):
         _, verb, rid = (action.split(":", 2) + ["", ""])[:3]
@@ -1751,7 +2054,8 @@ def _run_agent(sid: str, goal: str, root: Path) -> None:
                ask_user=lambda q: "(the person can't answer right now: make a sensible choice and say what you assumed)",
                web_search=(lambda q: get_google(q)) if GOOGLE_OK else None,
                on_step=lambda st: push(True),
-               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None)
+               schedules=schedule_store, notify=lambda t, m: nudges.nudge(f"agent:{t[:30]}", "low", t, m) if nudges else None,
+               on_file=lambda n: socketio.emit("files_state", _files_state(), room=sid))
     agents[ag.run.id] = ag
     socketio.emit("status", {"state": "thinking", "message": "Working on it…"}, room=sid)
     try:
@@ -1935,6 +2239,7 @@ try:
     from setups.profiles import SetupStore, PROFILES, parse_switch, parse_decision
     from setups.router import Router, Unavailable, messages_to_prompt
     from setups.pipeline import Builder
+    from setups.orchestra import Orchestra
     from setups.probe import probe as hw_probe, describe as hw_describe
     from orchestrator.local_model import LocalClient
     SETUPS_OK = True
@@ -1944,6 +2249,8 @@ except Exception as _e:
 
 router = None
 builds: dict = {}
+orchs: dict = {}
+live_reports: dict = {}
 
 
 def _retry(fn, tries: int = 4):
@@ -1980,7 +2287,7 @@ if SETUPS_OK:
     router = Router(setup_store, _strong_cloud, _fast_cloud, LocalClient.from_env())
 
 schedule_store = None
-privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
+board = privacy = activity_log = nudges = bridge = people_db = sync_service = guardian = projects_db = autopilot = guard_settings = scanner_obj = download_watcher = sweeper = ransom_watch = writer_tracker = None
 proc_watcher = window_watcher = screen_watcher = tray = None
 latest_page: dict = {}
 
@@ -1989,9 +2296,15 @@ if AWARE_OK:
     activity_log = ActivityLog(privacy)
     people_db = People()
     projects_db = Projects()
-    guardian = Guardian(AuditLog())
+    from awareness.hardware import Hardware
+    from awareness.netinfo import NetBoard
+    from awareness import programs as _programs
+    from vanta_ui.board import Board
     from agent.schedules import Schedules
+    guardian = Guardian(AuditLog(), programs=lambda: _programs.installed())
     schedule_store = Schedules()
+    board = Board(Hardware(), NetBoard(), lambda ev, d, sid: socketio.emit(ev, d, room=sid))
+    threading.Thread(target=board.run, name="vanta-board", daemon=True).start()
     guard_settings = GuardSettings()
 
     def _auto_notify(kind, d):
@@ -2394,6 +2707,130 @@ def classic_index():
         rag_ok=RAG_OK,
         boot_status=boot_status,
     )
+
+def _guest_chat(sid: str, msg: str, name: str) -> None:
+    """A recognised guest gets plain conversation only: no tools, files, memory or personal details, and no actions."""
+    system = (f"You are {AGENT}, a friendly voice assistant. You are talking to {name}, a guest of the owner. "
+              "Chat helpfully and briefly. You cannot open files, run commands, send messages, or share anything about the owner, "
+              "their computer or their data. If asked to do any of that, say politely that only the owner can ask for it.")
+    socketio.emit("status", {"state": "thinking", "message": "Thinking…"}, room=sid)
+    try:
+        r = client.chat.completions.create(model=FAST_MODEL, max_tokens=300, temperature=0.6,
+                                           messages=[{"role": "system", "content": system}, {"role": "user", "content": msg[:1000]}])
+        text = (r.choices[0].message.content or "").strip() or "Sorry, I didn't catch that."
+    except Exception:
+        text = "Sorry, I couldn't answer that just now."
+    socketio.emit("response", {"text": text, "guest": name}, room=sid)
+    socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _voice_off():
+    return jsonify({"error": "Voice recognition isn't available on this install."}), 503
+
+
+@app.route("/voice/listen", methods=["POST"])
+def voice_listen():
+    """Takes one spoken clip (16 kHz mono WAV): writes down the words and says who spoke."""
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    f = request.files.get("audio")
+    if not f:
+        return jsonify({"error": "No audio"}), 400
+    if _offline():
+        return jsonify({"error": "Offline mode is on, so voice typing (which needs the internet) is off."}), 503
+    data = f.read()
+    if VOICE is not None and VOICE.active():
+        try:
+            if not VOICE.has_speech(data):
+                return jsonify({"text": "", "speaker": {"status": "silent"}, "ticket": ""})
+        except Exception:
+            return jsonify({"error": "That recording couldn't be read."}), 400
+    tmp = Path(tempfile.gettempdir()) / f"vanta_listen_{uuid.uuid4().hex}.wav"
+    tmp.write_bytes(data)
+    try:
+        with open(tmp, "rb") as fp:
+            r = client.audio.transcriptions.create(model="whisper-large-v3-turbo", file=fp, response_format="text")
+        text = (r.strip() if isinstance(r, str) else r.text.strip())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp.unlink(missing_ok=True)
+    out = {"text": text, "speaker": {"status": "off"}, "ticket": ""}
+    if VOICE is not None and text:
+        try:
+            out.update(VOICE.identify(data, text))
+        except Exception as e:
+            print(f"voice id failed: {e}")
+            out.update({"speaker": {"status": "error"}, "ticket": ""})
+            if VOICE.active():
+                out["speaker"] = {"status": "unknown", "role": "unknown", "note": "I couldn't check the voice."}
+    return jsonify(out)
+
+
+@app.route("/voice/status")
+def voice_status():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return jsonify({"supported": False, "installed": False, "enrolled": False, "people": []})
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/setup", methods=["POST"])
+def voice_setup():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    try:
+        VOICE.setup()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/enroll", methods=["POST"])
+def voice_enroll():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    clips = [f.read() for f in request.files.getlist("audio")]
+    person = request.form.get("person")
+    try:
+        res = VOICE.enroll(request.form.get("name", ""), request.form.get("role", "guest"), clips,
+                           int(person) if person and person.isdigit() else None)
+    except (ValueError, RuntimeError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({**res, **VOICE.status()})
+
+
+@app.route("/voice/people/<int:pid>", methods=["POST", "DELETE"])
+def voice_person(pid: int):
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    if request.method == "DELETE":
+        VOICE.remove(pid)
+    else:
+        d = request.get_json(silent=True) or {}
+        try:
+            VOICE.rename(pid, d.get("name"), d.get("role"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/forget-unknown", methods=["POST"])
+def voice_forget_unknown():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    VOICE.forget_unknown()
+    return jsonify(VOICE.status())
+
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():

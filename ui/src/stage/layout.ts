@@ -20,7 +20,7 @@ export const MOBILE_BREAKPOINT = 820
 
 const HEIGHTS: Record<BlockType, number> = {
   text: 150, node: 84, news: 150, chart: 160, code: 260, table: 220, image: 300,
-  steps: 200, svg: 300, html: 300, weather: 140, recommendation: 116,
+  steps: 200, svg: 300, html: 300, weather: 140, recommendation: 116, stat: 120, bars: 180, source: 140,
 }
 const h = (b: Block) => HEIGHTS[b.type] ?? 150
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))

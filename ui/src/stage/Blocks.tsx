@@ -33,7 +33,7 @@ function Chart({ b }: { b: Block }) {
   return (<><Head kind="chart" title={b.title} right={b.data.note ? <span style={{ font: '10px var(--mono)', color: 'var(--muted)' }}>{str(b.data.note)}</span> : null} />
     <div className="block-body" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={b.title || 'chart'}>
-        {vals.map((v, i) => { const h = Math.max(3, (v / max) * (H - 4)); return <rect key={i} x={i * step + (step - bw) / 2} y={H - h} width={bw} height={h} rx={2} fill={i >= hi ? '#F2B35E' : '#2A4A72'} /> })}
+        {vals.map((v, i) => { const h = Math.max(3, (v / max) * (H - 4)); return <rect key={i} x={i * step + (step - bw) / 2} y={H - h} width={bw} height={h} rx={2} style={{ fill: i >= hi ? 'var(--alert)' : 'var(--accent-line)' }} /> })}
       </svg>
       <div style={{ display: 'flex', justifyContent: 'space-between', font: '10px var(--mono)', color: 'var(--muted)' }}><span>{str(b.data.from)}</span><span>{str(b.data.to ?? 'now')}</span></div>
     </div></>)
@@ -53,6 +53,29 @@ function Table({ b }: { b: Block }) {
   return (<><Head kind="table" title={b.title} />
     <div className="block-body"><table className="tbl"><thead><tr>{cols.map((c, i) => <th key={i}>{c}</th>)}</tr></thead>
       <tbody>{rows.map((r, i) => <tr key={i}>{(Array.isArray(r) ? r : [r]).map((c, j) => <td key={j}>{str(c)}</td>)}</tr>)}</tbody></table></div></>)
+}
+
+function Stat({ b }: { b: Block }) {
+  return (<><Head kind="stat" title={b.title} /><div className="block-body stat"><b>{str(b.data.value)}</b><span>{str(b.data.label)}</span></div></>)
+}
+
+function Bars({ b }: { b: Block }) {
+  const pts: { label: string; value: number }[] = Array.isArray(b.data.points) ? b.data.points.map((p: { label?: unknown; value?: unknown }) => ({ label: str(p.label), value: Number(p.value) })).filter((p: { value: number }) => Number.isFinite(p.value)) : []
+  const max = Math.max(1, ...pts.map((p) => p.value))
+  return (<><Head kind="chart" title={b.title} right={b.data.unit ? <span style={{ font: '10px var(--mono)', color: 'var(--muted)' }}>{str(b.data.unit)}</span> : null} />
+    <div className="block-body barchart" role="img" aria-label={b.title || 'bar chart'}>
+      {pts.map((p, i) => (<div className="bar-col" key={i}><em>{p.value}</em><i style={{ height: `${Math.max(4, (p.value / max) * 100)}%` }} /><span>{p.label}</span></div>))}
+    </div></>)
+}
+
+function Source({ b }: { b: Block }) {
+  const url = str(b.data.url), img = str(b.data.image)
+  let host = ''
+  try { host = new URL(url).hostname.replace(/^www\./, '') } catch { /* no link */ }
+  const body = (<>
+    {img ? <img className="src-img" src={img} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : null}
+    <div className="block-body src"><span className="src-n">{str(b.data.n)}</span><b>{b.title}</b><em>{host}</em></div></>)
+  return url ? <a className="src-link" href={url} target="_blank" rel="noopener noreferrer">{body}</a> : body
 }
 
 function Steps({ b }: { b: Block }) {
@@ -104,6 +127,9 @@ export function BlockBody({ b }: { b: Block }) {
     case 'image': return <ImageBlock b={b} />
     case 'svg': case 'html': return <Sandboxed b={b} />
     case 'weather': return <Weather b={b} />
+    case 'stat': return <Stat b={b} />
+    case 'bars': return <Bars b={b} />
+    case 'source': return <Source b={b} />
     default: return null
   }
 }

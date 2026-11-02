@@ -173,6 +173,81 @@ def agent_stage(run, working: bool) -> dict:
     return stg
 
 
+def orchestra_stage(run, working: bool) -> dict:
+    """Live view of a manager and its worker agents. Updated on every change (same id)."""
+    mark = {"done": "done", "doing": "active", "failed": "active", "skipped": "active", "todo": "todo"}
+    items = [{"label": f"{t.goal[:58]}" + (" (retrying)" if t.status == "doing" and t.retries else "") + (" (failed)" if t.status == "failed" else " (skipped)" if t.status == "skipped" else ""),
+              "state": mark.get(t.status, "todo")} for t in run.tasks]
+    if run.status == "planning":
+        items = [{"label": "Manager is planning the jobs", "state": "active"}]
+    blocks = [{"id": "goal", "type": "node", "title": "Goal", "data": {"value": run.goal[:60]}},
+              {"id": "team", "type": "steps", "title": "Manager and workers", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None, "data": {"items": items}}]
+    links = [{"from": "goal", "to": "team", "label": "split into jobs"}]
+    actions = [{"id": f"team:stop:{run.id}", "label": "Stop", "kind": "secondary"}] if working else [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if not working:
+        blocks.append({"id": "res", "type": "text", "title": "Manager's summary", "tone": "good" if run.status == "done" else "warn", "data": {"body": run.final or "Finished."}})
+        links.append({"from": "team", "to": "res", "label": "result"})
+        if run.changed:
+            actions = [{"id": f"team:undo:{run.id}", "label": f"Undo the team's changes ({len(run.changed)} file{'s' if len(run.changed) > 1 else ''})", "kind": "secondary"}, {"id": "dismiss", "label": "Keep them", "kind": "ghost"}]
+    stg = make_stage(("Team: " + run.goal)[:60], blocks, links, actions=actions, layout="investigation")
+    stg["id"] = f"team-{run.id}"
+    return stg
+
+
+def report_stage(run, working: bool) -> dict:
+    """The research report: a progress card while it works, then a mosaic of panels. Same id every update."""
+    steps = [{"label": x["label"], "state": x["state"]} for x in run.steps]
+    blocks: list = []
+    if working or run.status != "done":
+        blocks.append({"id": "progress", "type": "steps", "title": "Research agent", "tone": "good" if run.status == "done" else "warn" if run.status in ("failed", "stopped") else None,
+                       "data": {"items": steps or [{"label": "Starting", "state": "active"}]}})
+        read = sum(1 for x in run.sources if x.status == "read")
+        if run.sources:
+            blocks.append({"id": "count", "type": "stat", "title": "Sources", "data": {"value": f"{read}/{len(run.sources)}", "label": "pages read"}})
+        if run.facts:
+            blocks.append({"id": "facts", "type": "stat", "title": "Verified", "data": {"value": str(len(run.facts)), "label": "facts checked against the pages"}})
+        if run.note:
+            blocks.append({"id": "note", "type": "text", "title": "Result", "tone": "warn", "data": {"body": run.note}})
+    else:
+        if run.summary:
+            blocks.append({"id": "summary", "type": "text", "title": run.title, "tone": "good", "data": {"body": run.summary, "kind": "summary"}})
+        for i, st in enumerate(run.stats):
+            blocks.append({"id": f"stat{i}", "type": "stat", "title": f"Source {st['src']}", "data": {"value": st["value"], "label": st["label"], "src": st["src"]}})
+        for i, c in enumerate(run.charts):
+            blocks.append({"id": f"bars{i}", "type": "bars", "title": c["title"], "data": {"unit": c["unit"], "points": c["points"]}})
+        for i, sec in enumerate(run.sections):
+            blocks.append({"id": f"sec{i}", "type": "text", "title": sec["heading"], "data": {"body": sec["body"], "kind": "src " + ", ".join(str(n) for n in sec["src"])}})
+        for x in run.sources:
+            if x.status == "read" and len(blocks) < 12:
+                blocks.append({"id": f"src{x.n}", "type": "source", "title": x.title, "data": {"n": x.n, "url": x.url, "image": x.image}})
+        note = f"{len(run.facts)} facts checked against their pages"
+        if run.dropped:
+            note += f", {run.dropped} claim(s) thrown out because I couldn't verify them"
+        blocks = blocks[:12]
+        blocks.append({"id": "trust", "type": "text", "title": "How this was checked", "data": {"body": note + ". Numbers shown appear word for word in the cited source."}}) if len(blocks) < 12 else None
+    actions = [{"id": f"report:stop:{run.id}", "label": "Stop", "kind": "secondary"}] if working else [{"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    if not working and run.status == "done":
+        actions = [{"id": f"report:save:{run.id}", "label": "Save as file", "kind": "primary"}, {"id": "dismiss", "label": "Close", "kind": "ghost"}]
+    stg = make_stage(("Report: " + (run.title or run.topic))[:60], blocks, actions=actions, layout="report")
+    stg["id"] = f"report-{run.id}"
+    stg["working"] = bool(working)
+    return stg
+
+
+def report_markdown(run) -> str:
+    """The same report as a plain markdown file, with numbered sources."""
+    out = [f"# {run.title}", "", run.summary, ""]
+    for st in run.stats:
+        out.append(f"- **{st['value']}** {st['label']} [{st['src']}]")
+    for sec in run.sections:
+        out += ["", f"## {sec['heading']}", sec["body"] + " " + "".join(f"[{n}]" for n in sec["src"])]
+    for c in run.charts:
+        out += ["", f"### {c['title']} ({c['unit']})"] + [f"- {p['label']}: {p['value']} [{p['src']}]" for p in c["points"]]
+    out += ["", "## Sources"] + [f"{x.n}. {x.title} <{x.url}>" for x in run.sources if x.status == "read"]
+    out += ["", f"_{len(run.facts)} facts checked against their pages; {run.dropped} unverified claim(s) discarded._"]
+    return "\n".join(out)
+
+
 _BUILD_STEPS = [("blueprint", "Plan the build (strong brain)"), ("writing files", "Write the files (fast brain)"),
                 ("senior review", "Senior review (strong brain)"), ("checking", "Checks and fixes")]
 

@@ -1,4 +1,4 @@
-"""Active-window watcher (Windows) + optional UI Automation snapshot.
+"""Active-window watcher (Windows; Linux/X11 with xdotool) + optional UI Automation snapshot.
 
 Logs which app and window title you're using, and idle/active changes.
 It never records keystrokes or window contents continuously. `snapshot_focused()`
@@ -50,12 +50,55 @@ def _windows_idle_seconds() -> float:
     return (ctypes.windll.kernel32.GetTickCount() - li.dwTime) / 1000.0
 
 
+def _run(argv: list[str]) -> str:
+    import subprocess
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        return ""
+
+
+def linux_active_window(run: Callable[[list[str]], str] = _run) -> Optional[tuple[str, str]]:
+    """X11 only, needs the free `xdotool` package (sudo apt install xdotool). On Wayland there is no safe way, so it returns None."""
+    wid = run(["xdotool", "getactivewindow"])
+    if not wid.isdigit():
+        return None
+    title = run(["xdotool", "getwindowname", wid])
+    pid = run(["xdotool", "getwindowpid", wid])
+    app = "?"
+    if pid.isdigit():
+        try:
+            app = psutil.Process(int(pid)).name().lower()
+        except psutil.Error:
+            pass
+    return app, title
+
+
+def linux_idle_seconds(run: Callable[[list[str]], str] = _run) -> float:
+    """Needs `xprintidle` (sudo apt install xprintidle). Without it we report 0, meaning 'never idle'."""
+    out = run(["xprintidle"])
+    return int(out) / 1000.0 if out.isdigit() else 0.0
+
+
+def _has(cmd: str) -> bool:
+    import shutil
+    return shutil.which(cmd) is not None
+
+
 def default_provider() -> Optional[Callable[[], Optional[tuple[str, str]]]]:
-    return _windows_active_window if sys.platform == "win32" else None
+    if sys.platform == "win32":
+        return _windows_active_window
+    if sys.platform.startswith("linux") and _has("xdotool") and __import__("os").environ.get("DISPLAY"):
+        return linux_active_window
+    return None
 
 
 def default_idle() -> Optional[Callable[[], float]]:
-    return _windows_idle_seconds if sys.platform == "win32" else None
+    if sys.platform == "win32":
+        return _windows_idle_seconds
+    if sys.platform.startswith("linux") and _has("xprintidle") and __import__("os").environ.get("DISPLAY"):
+        return linux_idle_seconds
+    return None
 
 
 class WindowWatcher:

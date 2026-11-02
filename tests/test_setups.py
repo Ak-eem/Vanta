@@ -182,3 +182,17 @@ def test_probe_and_estimates(tmp_path):
     assert "streams" in giant["mode"] and giant["s_per_word"] > 100       # a hard drive makes the giant very slow
     assert "fits" in by["A 7-8B local model"]["mode"]
     assert "words" in describe(fake)
+
+
+def test_orchestra_setup_and_stage():
+    from setups.profiles import parse_switch, PROFILES
+    from setups.orchestra import OrchRun, Task
+    from vanta_ui.stage import orchestra_stage
+    assert parse_switch("switch to team mode") == "orchestra" and parse_switch("/setup orchestra") == "orchestra" and "orchestra" in PROFILES
+    r = OrchRun("abc", "fix login", [Task("t1", "find it", status="done"), Task("t2", "patch it", status="doing", retries=1), Task("t3", "test", status="todo")], status="running")
+    st = orchestra_stage(r, True)
+    items = [b for b in st["blocks"] if b["type"] == "steps"][0]["data"]["items"]
+    assert [i["state"] for i in items] == ["done", "active", "todo"] and "(retrying)" in items[1]["label"]
+    assert st["actions"][0]["id"] == "team:stop:abc"
+    r.status, r.changed = "done", ["a.py"]
+    assert orchestra_stage(r, False)["actions"][0]["id"] == "team:undo:abc"

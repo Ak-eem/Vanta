@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
-import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState } from '../types'
+import type { Approval, ChatMessage, Nudge, PrivacyState, SphereState, Stage, SyncState, Telemetry, Project, GuardianState, ScanResult, SetupState, HwState, WeatherState, FilesState } from '../types'
 import { sanitizeSetup } from './setup'
 import { sanitizeStage } from '../stage/sanitize'
 import { calmError } from './calmError'
@@ -21,6 +21,10 @@ export interface State {
   speaking: boolean
   workspace: { filenames: string[]; run_cmd?: string } | null
   tel: Telemetry | null
+  hw: HwState | null
+  focus: string | null
+  weather: WeatherState | null
+  files: FilesState | null
   sync: SyncState | null
   projects: Project[]
   guardian: GuardianState | null
@@ -46,6 +50,10 @@ type Action =
   | { t: 'concern'; ms: number }
   | { t: 'workspace'; v: State['workspace'] }
   | { t: 'tel'; v: unknown }
+  | { t: 'hw'; v: HwState }
+  | { t: 'focus'; card: string | null }
+  | { t: 'weather'; v: WeatherState }
+  | { t: 'files'; v: FilesState }
   | { t: 'sync'; v: SyncState }
   | { t: 'projects'; v: Project[] }
   | { t: 'guardian'; v: GuardianState }
@@ -58,7 +66,7 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 export const initial: State = {
   conn: 'connecting', status: 'idle', statusText: '', messages: [], stages: [], activeStageId: null, pinned: false,
   privacy: { paused: false, watching: true, sources: {} }, nudge: null, approval: null,
-  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
+  concernUntil: 0, errorUntil: 0, speaking: false, workspace: null, tel: null, hw: null, focus: null, weather: null, files: null, sync: null, projects: [], guardian: null, scans: [], setup: null,
 }
 
 export function reducer(s: State, a: Action): State {
@@ -96,6 +104,10 @@ export function reducer(s: State, a: Action): State {
     case 'open': return { ...s, activeStageId: a.id }
     case 'pin': return { ...s, pinned: !s.pinned }
     case 'clearStage': return { ...s, activeStageId: null, pinned: false }
+    case 'hw': return { ...s, hw: a.v }
+    case 'weather': return { ...s, weather: a.v }
+    case 'files': return { ...s, files: a.v }
+    case 'focus': return { ...s, focus: a.card, activeStageId: a.card ? null : s.activeStageId, pinned: a.card ? false : s.pinned }
     case 'privacy': return { ...s, privacy: a.v }
     case 'nudge': return { ...s, nudge: a.v }
     case 'approval': return { ...s, approval: a.v }
@@ -138,7 +150,7 @@ export function useVanta() {
   useEffect(() => {
     const socket = io({ transports: ['websocket', 'polling'] })
     sock.current = socket
-    socket.on('connect', () => { dispatch({ t: 'conn', v: 'online' }); socket.emit('privacy_get'); socket.emit('sync_get') })
+    socket.on('connect', () => { dispatch({ t: 'conn', v: 'online' }); socket.emit('privacy_get'); socket.emit('sync_get'); socket.emit('hw_watch', { on: true }); socket.emit('weather_get', {}); socket.emit('files_get') })
     socket.on('disconnect', () => dispatch({ t: 'conn', v: 'offline' }))
     socket.on('connect_error', (err) => {
       dispatch({ t: 'conn', v: 'offline' })
@@ -148,6 +160,8 @@ export function useVanta() {
     socket.on('stream_chunk', (d: { chunk: string }) => dispatch({ t: 'chunk', text: d.chunk }))
     socket.on('stream_done', () => dispatch({ t: 'done' }))
     socket.on('response', (d: { text: string }) => dispatch({ t: 'say', text: d.text }))
+    socket.on('narrate', (d: { text?: unknown }) => { if (typeof d?.text === 'string' && d.text.trim()) dispatch({ t: 'say', text: d.text.slice(0, 240), tag: 'narration' }) })
+    socket.on('voice_ignored', (d: { name?: string; role?: string }) => dispatch({ t: 'say', text: d?.name && !/^Unknown voice/.test(d.name) ? `I heard ${d.name}, but I only take requests from you.` : "I heard a voice I don't know, so I ignored it.", tag: 'narration' }))
     socket.on('error', (d: { message: string }) => dispatch({ t: 'error', message: d.message }))
     socket.on('privacy_state', (d: PrivacyState) => dispatch({ t: 'privacy', v: d }))
     socket.on('workspace_files', (d: { filenames: string[]; run_cmd?: string }) => dispatch({ t: 'workspace', v: d }))
@@ -157,6 +171,10 @@ export function useVanta() {
     socket.on('guardian_state', (d: GuardianState) => dispatch({ t: 'guardian', v: d }))
     socket.on('setup_state', (d: unknown) => dispatch({ t: 'setup', v: d }))
     socket.on('sync_state', (d: SyncState) => dispatch({ t: 'sync', v: d }))
+    socket.on('hw_focus', (d: { card: string }) => dispatch({ t: 'focus', card: d.card }))
+    socket.on('weather_state', (d: WeatherState) => dispatch({ t: 'weather', v: d }))
+    socket.on('files_state', (d: FilesState) => dispatch({ t: 'files', v: d }))
+    socket.on('hw_state', (d: HwState) => dispatch({ t: 'hw', v: d }))
     socket.on('telemetry', (d: unknown) => dispatch({ t: 'tel', v: d }))
     socket.on('nudge', (d: Nudge) => {
       dispatch({ t: 'nudge', v: d })
@@ -183,21 +201,15 @@ export function useVanta() {
       })
       if (stage) { dispatch({ t: 'stage', stage }); dispatch({ t: 'say', text: stage.summary!, tag: 'heads-up', stageId: stage.id, stageLabel: stage.title }); dispatch({ t: 'concern', ms: 12000 }) }
     })
-    socket.on('weather_card', (d: { temp: number; condition: string; city: string }) => {
-      const stage = sanitizeStage({
-        id: 'weather', title: `Weather · ${d.city}`, blocks: [{ id: 'w', type: 'weather', data: d }],
-      })
-      if (stage) dispatch({ t: 'stage', stage })
-    })
     const timer = window.setInterval(() => tick(), 1000) // lets time-boxed states (alert/error) expire
     return () => { window.clearInterval(timer); socket.close() }
   }, [])
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, voice = false, voice_ticket = '') => {
     const t = text.trim()
     if (!t) return
     dispatch({ t: 'user', text: t })
-    sock.current?.emit('chat', { message: t, think: false })
+    sock.current?.emit('chat', { message: t, think: false, voice, ...(voice_ticket ? { voice_ticket } : {}) })
   }, [])
   const api = useMemo(() => ({
     send,
@@ -223,6 +235,10 @@ export function useVanta() {
     pinStage: () => dispatch({ t: 'pin' }),
     clearStage: () => dispatch({ t: 'clearStage' }),
     stageAction: (stageId: string, actionId: string) => sock.current?.emit('stage_action', { stage: stageId, action: actionId }),
+    getWeather: (city?: string) => sock.current?.emit('weather_get', { city }),
+    getFiles: () => sock.current?.emit('files_get'),
+    hwEnd: (pid: number) => sock.current?.emit('hw_end', { pid }),
+    hwUninstall: (id: string) => sock.current?.emit('hw_uninstall', { id }),
     dispatch,
   }), [send])
   return { state, api }

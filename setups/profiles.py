@@ -27,6 +27,8 @@ PROFILES: dict[str, dict] = {
               "desc": "The strongest model, thinking deeply. It questions your idea instead of just agreeing."},
     "builder": {"label": "Builder", "cloud": True, "effort": None, "overlay": "",
                 "desc": "Two brains: a strong model plans and reviews, a fast one builds. Use /build."},
+    "orchestra": {"label": "Orchestra", "cloud": True, "effort": None, "overlay": "",
+                  "desc": "A strong model is the manager. It splits a job up, small fast agents do the parts, it checks their work. Use /team."},
     "offline": {"label": "Offline", "cloud": False, "effort": None, "overlay": OFFLINE_OVERLAY,
                 "desc": "Only the model on this laptop. Nothing leaves it."},
 }
@@ -35,6 +37,7 @@ _ALIASES = {
     "everyday": "everyday", "normal": "everyday", "default": "everyday",
     "think": "think", "thinking": "think", "brainstorm": "think", "think with me": "think",
     "builder": "builder", "build": "builder", "two brain": "builder", "two-brain": "builder",
+    "orchestra": "orchestra", "team": "orchestra", "manager": "orchestra", "delegate": "orchestra", "boss": "orchestra",
     "offline": "offline", "private": "offline", "local": "offline",
 }
 

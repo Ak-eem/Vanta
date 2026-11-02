@@ -99,6 +99,6 @@ describe('sanitizeStage treats input as untrusted', () => {
     expect(sanitizeStage(null)).toBeNull(); expect(sanitizeStage({ blocks: [] })).toBeNull(); expect(sanitizeStage({ blocks: [{ type: 'nope' }] })).toBeNull()
   })
   it('caps the number of blocks', () => {
-    expect(sanitizeStage({ blocks: Array.from({ length: 40 }, (_, i) => ({ id: `x${i}`, type: 'node', data: {} })) })!.blocks).toHaveLength(12)
+    expect(sanitizeStage({ blocks: Array.from({ length: 40 }, (_, i) => ({ id: `x${i}`, type: 'node', data: {} })) })!.blocks).toHaveLength(16)
   })
 })
