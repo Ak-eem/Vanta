@@ -118,6 +118,13 @@ MAX_HIST   = 14
 Path(WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
 
 client = Groq(api_key=GROQ_API_KEY)
+
+try:
+    from voiceid.service import VoiceService
+    VOICE = VoiceService(Path.home() / ".vanta", FLASK_SECRET)
+except Exception as _exc:  # voice recognition is optional
+    print(f"Voice recognition unavailable: {_exc}")
+    VOICE = None
 if ORCH_OK:
     orchestrator = VantaOrchestrator(client, MODEL)
 if MEMORY_OK:
@@ -1134,6 +1141,22 @@ def handle_chat(data):
     print(f"🔵 handle_chat received: {msg[:60]!r}")
     if not msg:
         return
+
+    # ── Who is speaking? Typed messages come from the logged-in owner; spoken ones carry a signed voice ticket ──
+    voice_ticket = data.get("voice_ticket")
+    if voice_ticket and VOICE is not None:
+        who = VOICE.check(str(voice_ticket), msg)
+        if who is None:
+            socketio.emit("response", {"text": "I couldn't confirm who said that, so I ignored it."}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+            return
+        if who["role"] == "guest":
+            _guest_chat(sid, msg, who["name"])
+            return
+        if who["role"] != "owner":
+            socketio.emit("voice_ignored", {"name": who["name"], "role": who["role"]}, room=sid)
+            socketio.emit("status", {"state": "idle"}, room=sid)
+            return
 
     # ── Wake-word gate ──────────────────────────────────────────────────────
     if msg.lower() in ("sleep", "go to sleep"):
@@ -2648,6 +2671,130 @@ def classic_index():
         rag_ok=RAG_OK,
         boot_status=boot_status,
     )
+
+def _guest_chat(sid: str, msg: str, name: str) -> None:
+    """A recognised guest gets plain conversation only: no tools, files, memory or personal details, and no actions."""
+    system = (f"You are {AGENT}, a friendly voice assistant. You are talking to {name}, a guest of the owner. "
+              "Chat helpfully and briefly. You cannot open files, run commands, send messages, or share anything about the owner, "
+              "their computer or their data. If asked to do any of that, say politely that only the owner can ask for it.")
+    socketio.emit("status", {"state": "thinking", "message": "Thinking…"}, room=sid)
+    try:
+        r = client.chat.completions.create(model=FAST_MODEL, max_tokens=300, temperature=0.6,
+                                           messages=[{"role": "system", "content": system}, {"role": "user", "content": msg[:1000]}])
+        text = (r.choices[0].message.content or "").strip() or "Sorry, I didn't catch that."
+    except Exception:
+        text = "Sorry, I couldn't answer that just now."
+    socketio.emit("response", {"text": text, "guest": name}, room=sid)
+    socketio.emit("status", {"state": "idle"}, room=sid)
+
+
+def _voice_off():
+    return jsonify({"error": "Voice recognition isn't available on this install."}), 503
+
+
+@app.route("/voice/listen", methods=["POST"])
+def voice_listen():
+    """Takes one spoken clip (16 kHz mono WAV): writes down the words and says who spoke."""
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    f = request.files.get("audio")
+    if not f:
+        return jsonify({"error": "No audio"}), 400
+    if _offline():
+        return jsonify({"error": "Offline mode is on, so voice typing (which needs the internet) is off."}), 503
+    data = f.read()
+    if VOICE is not None and VOICE.active():
+        try:
+            if not VOICE.has_speech(data):
+                return jsonify({"text": "", "speaker": {"status": "silent"}, "ticket": ""})
+        except Exception:
+            return jsonify({"error": "That recording couldn't be read."}), 400
+    tmp = Path(tempfile.gettempdir()) / f"vanta_listen_{uuid.uuid4().hex}.wav"
+    tmp.write_bytes(data)
+    try:
+        with open(tmp, "rb") as fp:
+            r = client.audio.transcriptions.create(model="whisper-large-v3-turbo", file=fp, response_format="text")
+        text = (r.strip() if isinstance(r, str) else r.text.strip())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp.unlink(missing_ok=True)
+    out = {"text": text, "speaker": {"status": "off"}, "ticket": ""}
+    if VOICE is not None and text:
+        try:
+            out.update(VOICE.identify(data, text))
+        except Exception as e:
+            print(f"voice id failed: {e}")
+            out.update({"speaker": {"status": "error"}, "ticket": ""})
+            if VOICE.active():
+                out["speaker"] = {"status": "unknown", "role": "unknown", "note": "I couldn't check the voice."}
+    return jsonify(out)
+
+
+@app.route("/voice/status")
+def voice_status():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return jsonify({"supported": False, "installed": False, "enrolled": False, "people": []})
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/setup", methods=["POST"])
+def voice_setup():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    try:
+        VOICE.setup()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/enroll", methods=["POST"])
+def voice_enroll():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    clips = [f.read() for f in request.files.getlist("audio")]
+    person = request.form.get("person")
+    try:
+        res = VOICE.enroll(request.form.get("name", ""), request.form.get("role", "guest"), clips,
+                           int(person) if person and person.isdigit() else None)
+    except (ValueError, RuntimeError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({**res, **VOICE.status()})
+
+
+@app.route("/voice/people/<int:pid>", methods=["POST", "DELETE"])
+def voice_person(pid: int):
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    if request.method == "DELETE":
+        VOICE.remove(pid)
+    else:
+        d = request.get_json(silent=True) or {}
+        try:
+            VOICE.rename(pid, d.get("name"), d.get("role"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    return jsonify(VOICE.status())
+
+
+@app.route("/voice/forget-unknown", methods=["POST"])
+def voice_forget_unknown():
+    if not _is_authed():
+        return jsonify({"error": "unauthorized"}), 401
+    if VOICE is None:
+        return _voice_off()
+    VOICE.forget_unknown()
+    return jsonify(VOICE.status())
+
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
